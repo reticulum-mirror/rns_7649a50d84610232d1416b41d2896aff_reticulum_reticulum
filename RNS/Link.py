@@ -1010,20 +1010,25 @@ class Link:
                     elif packet.context == RNS.Packet.LINKIDENTIFY:
                         plaintext = self.decrypt(packet.data)
                         if plaintext != None:
-                            if not self.initiator and len(plaintext) == RNS.Identity.KEYSIZE//8 + RNS.Identity.SIGLENGTH//8:
+                            identify_size = RNS.Identity.KEYSIZE//8 + RNS.Identity.SIGLENGTH//8
+                            stamped_size  = identify_size + RNS.Stamp.STAMP_SIZE
+                            if not self.initiator and len(plaintext) >= identify_size:
                                 public_key   = plaintext[:RNS.Identity.KEYSIZE//8]
                                 signed_data  = self.link_id+public_key
                                 signature    = plaintext[RNS.Identity.KEYSIZE//8:RNS.Identity.KEYSIZE//8+RNS.Identity.SIGLENGTH//8]
                                 identity     = RNS.Identity(create_keys=False)
                                 identity.load_public_key(public_key)
 
+                                if len(plaintext) >= stamped_size: stamp = plaintext[identify_size:stamped_size]
+                                else:                              stamp = None
+
                                 if identity.validate(signature, signed_data):
+                                    if stamp: pass # TODO: Implement
+
                                     self.__remote_identity = identity
                                     if self.callbacks.remote_identified != None:
-                                        try:
-                                            self.callbacks.remote_identified(self, self.__remote_identity)
-                                        except Exception as e:
-                                            RNS.log("Error while executing remote identified callback from "+str(self)+". The contained exception was: "+str(e), RNS.LOG_ERROR)
+                                        try: self.callbacks.remote_identified(self, self.__remote_identity)
+                                        except Exception as e: RNS.log(f"Error while executing remote identified callback from {self}: {e}", RNS.LOG_ERROR)
                                 
                                     self.__update_phy_stats(packet, query_shared=True)
 

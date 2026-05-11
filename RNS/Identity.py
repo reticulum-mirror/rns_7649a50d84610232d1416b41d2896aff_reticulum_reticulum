@@ -90,10 +90,17 @@ class Identity:
     DERIVED_KEY_LENGTH        = 512//8
     DERIVED_KEY_LENGTH_LEGACY = 256//8
 
+    # Stamp status codes
+    NO_STAMP                  = 0x00
+    STAMP_GENERATING          = 0x01
+    STAMP_INVALID             = 0x02
+    STAMP_VALID               = 0xFF
+
     # Storage
     known_destinations = {}
     known_ratchets = {}
 
+    stamp_lock = threading.Lock()
     ratchet_persist_lock = threading.Lock()
     known_destinations_lock = threading.Lock()
 
@@ -687,21 +694,23 @@ class Identity:
 
     def __init__(self,create_keys=True):
         # Initialize keys to none
-        self.prv           = None
-        self.prv_bytes     = None
-        self.sig_prv       = None
-        self.sig_prv_bytes = None
+        self.prv                = None
+        self.prv_bytes          = None
+        self.sig_prv            = None
+        self.sig_prv_bytes      = None
 
-        self.pub           = None
-        self.pub_bytes     = None
-        self.sig_pub       = None
-        self.sig_pub_bytes = None
+        self.pub                = None
+        self.pub_bytes          = None
+        self.sig_pub            = None
+        self.sig_pub_bytes      = None
 
-        self.hash          = None
-        self.hexhash       = None
+        self.hash               = None
+        self.hexhash            = None
 
-        if create_keys:
-            self.create_keys()
+        self.stamp_bytes        = None
+        self.__stamp_generating = False
+
+        if create_keys: self.create_keys()
 
     def create_keys(self):
         self.prv           = X25519PrivateKey.generate()
@@ -800,6 +809,42 @@ class Identity:
 
     def get_context(self):
         return None
+
+    def generate_stamp(self, target_value=None, background=True):
+        """
+        Generate a stamp for this identity.
+
+        :param target_value: The minimum value of the generated stamp as *int*.
+        :param background: Whether or not to run stamp generation in the background. Defaults to *True*.
+        :returns: *True* if stamp generation was initiated, or if not running in background, *True* once generation completes. Will return *False* if stamp generation could not be started.
+        """
+        with self.stamp_lock:
+            if self.__stamp_generating: return False
+            else:
+                # TODO: Implement
+                pass
+
+        if not background:
+            while self.stamp_status == Identity.STAMP_GENERATING: time.sleep(0.2)
+
+        return True
+
+    @property
+    def stamp_status(self):
+        if   not self.stamp_bytes:    return Identity.NO_STAMP
+        elif self.__stamp_generating: return Identity.STAMP_GENERATING
+        elif self.__validate_stamp(): return Identity.STAMP_VALID
+        else:                         return Identity.STAMP_INVALID
+
+    @property
+    def stamp_valid(self):
+        if self.stamp == Identity.STAMP_VALID: return True
+        else:                                  return False
+
+    @property
+    def stamp_value(self):
+        # TODO: Implement
+        pass
 
     def encrypt(self, plaintext, ratchet=None):
         """
