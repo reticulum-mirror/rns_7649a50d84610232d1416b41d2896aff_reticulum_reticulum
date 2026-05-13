@@ -94,22 +94,14 @@ _always_override_destination = False
 logging_lock = threading.Lock()
 
 def loglevelname(level):
-    if (level == LOG_CRITICAL):
-        return "[Critical]"
-    if (level == LOG_ERROR):
-        return "[Error]   "
-    if (level == LOG_WARNING):
-        return "[Warning] "
-    if (level == LOG_NOTICE):
-        return "[Notice]  "
-    if (level == LOG_INFO):
-        return "[Info]    "
-    if (level == LOG_VERBOSE):
-        return "[Verbose] "
-    if (level == LOG_DEBUG):
-        return "[Debug]   "
-    if (level == LOG_EXTREME):
-        return "[Extra]   "
+    if (level == LOG_CRITICAL): return "[Critical]"
+    if (level == LOG_ERROR):    return "[Error]   "
+    if (level == LOG_WARNING):  return "[Warning] "
+    if (level == LOG_NOTICE):   return "[Notice]  "
+    if (level == LOG_INFO):     return "[Info]    "
+    if (level == LOG_VERBOSE):  return "[Verbose] "
+    if (level == LOG_DEBUG):    return "[Debug]   "
+    if (level == LOG_EXTREME):  return "[Extra]   "
     
     return "Unknown"
 
@@ -133,13 +125,10 @@ def log(msg, level=3, _override_destination = False, pt=False):
     global _always_override_destination, compact_log_fmt
     msg = str(msg)
     if loglevel >= level:
-        if pt:
-            logstring = "["+precise_timestamp_str(time.time())+"] "+loglevelname(level)+" "+msg
+        if pt: logstring = "["+precise_timestamp_str(time.time())+"] "+loglevelname(level)+" "+msg
         else:
-            if not compact_log_fmt:
-                logstring = "["+timestamp_str(time.time())+"] "+loglevelname(level)+" "+msg
-            else:
-                logstring = "["+timestamp_str(time.time())+"] "+msg
+            if not compact_log_fmt: logstring = "["+timestamp_str(time.time())+"] "+loglevelname(level)+" "+msg
+            else:                   logstring = "["+timestamp_str(time.time())+"] "+msg
 
         with logging_lock:
             if (logdest == LOG_STDOUT or _always_override_destination or _override_destination):
@@ -182,14 +171,11 @@ def trace_exception(e):
     log(exception_info, LOG_ERROR)
 
 def hexrep(data, delimit=True):
-    try:
-        iter(data)
-    except TypeError:
-        data = [data]
+    try: iter(data)
+    except TypeError: data = [data]
         
     delimiter = ":"
-    if not delimit:
-        delimiter = ""
+    if not delimit: delimiter = ""
     hexrep = delimiter.join("{:02x}".format(c) for c in data)
     return hexrep
 
@@ -197,11 +183,6 @@ def prettyhexrep(data):
     delimiter = ""
     hexrep = "<"+delimiter.join("{:02x}".format(c) for c in data)+">"
     return hexrep
-
-def prettyb256rep(data):
-    delimiter = ""
-    b256rep = "<"+delimiter.join(b256_rep(c) for c in data)+">"
-    return b256rep
 
 def prettyspeed(num, suffix="b"):
     return prettysize(num/8, suffix=suffix)+"ps"
@@ -217,10 +198,8 @@ def prettysize(num, suffix='B'):
 
     for unit in units:
         if abs(num) < 1000.0:
-            if unit == "":
-                return "%.0f %s%s" % (num, unit, suffix)
-            else:
-                return "%.2f %s%s" % (num, unit, suffix)
+            if unit == "": return "%.0f %s%s" % (num, unit, suffix)
+            else:          return "%.2f %s%s" % (num, unit, suffix)
         num /= 1000.0
 
     return "%.2f%s%s" % (num, last_unit, suffix)
@@ -251,8 +230,7 @@ def prettydistance(m, suffix="m"):
         if unit == "m": divisor = 10
         if unit == "c": divisor = 100
 
-        if abs(num) < divisor:
-            return "%.2f %s%s" % (num, unit, suffix)
+        if abs(num) < divisor: return "%.2f %s%s" % (num, unit, suffix)
         num /= divisor
 
     return "%.2f %s%s" % (num, last_unit, suffix)
@@ -269,10 +247,8 @@ def prettytime(time, verbose=False, compact=False):
     time %= 3600
     minutes = int(time // 60)
     time %= 60
-    if compact:
-        seconds = int(time)
-    else:
-        seconds = round(time, 2)
+    if compact: seconds = int(time)
+    else:       seconds = round(time, 2)
     
     ss = "" if seconds == 1 else "s"
     sm = "" if minutes == 1 else "s"
@@ -301,22 +277,16 @@ def prettytime(time, verbose=False, compact=False):
     tstr = ""
     for c in components:
         i += 1
-        if i == 1:
-            pass
-        elif i < len(components):
-            tstr += ", "
-        elif i == len(components):
-            tstr += " and "
+        if   i == 1: pass
+        elif i <  len(components): tstr += ", "
+        elif i == len(components): tstr += " and "
 
         tstr += c
 
-    if tstr == "":
-        return "0s"
+    if tstr == "": return "0s"
     else:
-        if not neg:
-            return tstr
-        else:
-            return f"-{tstr}"
+        if not neg: return tstr
+        else: return f"-{tstr}"
 
 def prettyshorttime(time, verbose=False, compact=False):
     neg = False
@@ -328,10 +298,8 @@ def prettyshorttime(time, verbose=False, compact=False):
     seconds = int(time // 1e6); time %= 1e6
     milliseconds = int(time // 1e3); time %= 1e3
 
-    if compact:
-        microseconds = int(time)
-    else:
-        microseconds = round(time, 2)
+    if compact: microseconds = int(time)
+    else:       microseconds = round(time, 2)
     
     ss = "" if seconds == 1 else "s"
     sms = "" if milliseconds == 1 else "s"
@@ -355,22 +323,16 @@ def prettyshorttime(time, verbose=False, compact=False):
     tstr = ""
     for c in components:
         i += 1
-        if i == 1:
-            pass
-        elif i < len(components):
-            tstr += ", "
-        elif i == len(components):
-            tstr += " and "
+        if   i == 1: pass
+        elif i <  len(components): tstr += ", "
+        elif i == len(components): tstr += " and "
 
         tstr += c
 
-    if tstr == "":
-        return "0us"
+    if tstr == "": return "0us"
     else:
-        if not neg:
-            return tstr
-        else:
-            return f"-{tstr}"
+        if not neg: return tstr
+        else:       return f"-{tstr}"
 
 def phyparams():
     print("Required Physical Layer MTU : "+str(Reticulum.MTU)+" bytes")
@@ -381,8 +343,7 @@ def phyparams():
     print("Link Public Key Size        : "+str(Link.ECPUBSIZE*8)+" bits")
     print("Link Private Key Size       : "+str(Link.KEYSIZE*8)+" bits")
 
-def panic():
-    os._exit(255)
+def panic(): os._exit(255)
 
 exit_called = False
 def exit(code=0):
@@ -403,8 +364,7 @@ class Profiler:
 
     @staticmethod
     def get_profiler(tag=None, super_tag=None):
-        if tag in Profiler.profilers:
-            return Profiler.profilers[tag]
+        if tag in Profiler.profilers: return Profiler.profilers[tag]
         else:
             profiler = Profiler(tag, super_tag)
             Profiler.profilers[tag] = profiler
@@ -416,13 +376,14 @@ class Profiler:
         self.pause_started = None
         self.tag = tag
         self.super_tag = super_tag
+
         if self.super_tag in Profiler.profilers:
             self.super_profiler = Profiler.profilers[self.super_tag]
             self.pause_super = self.super_profiler.pause
             self.resume_super = self.super_profiler.resume
+
         else:
-            def noop(self=None):
-                pass
+            def noop(self=None): pass
             self.super_profiler = None
             self.pause_super = noop
             self.resume_super = noop
@@ -432,8 +393,7 @@ class Profiler:
         tag = self.tag
         super_tag = self.super_tag
         thread_ident = threading.get_ident()
-        if not tag in Profiler.tags:
-            Profiler.tags[tag] = {"threads": {}, "super": super_tag}
+        if not tag in Profiler.tags: Profiler.tags[tag] = {"threads": {}, "super": super_tag}
         if not thread_ident in Profiler.tags[tag]["threads"]:
             Profiler.tags[tag]["threads"][thread_ident] = {"current_start": None, "captures": []}
 
@@ -469,8 +429,7 @@ class Profiler:
             self.resume_super()
 
     @staticmethod
-    def ran():
-        return Profiler._ran
+    def ran(): return Profiler._ran
 
     @staticmethod
     def results():
@@ -487,41 +446,35 @@ class Profiler:
                 sample_count = len(thread_captures)
                 
                 if sample_count > 1:
-                    thread_results = {
-                        "count": sample_count,
-                        "mean": mean(thread_captures),
-                        "median": median(thread_captures),
-                        "stdev": stdev(thread_captures)
-                    }
+                    thread_results = { "count": sample_count,
+                                       "mean": mean(thread_captures),
+                                       "median": median(thread_captures),
+                                       "stdev": stdev(thread_captures) }
+                
                 elif sample_count == 1:
-                    thread_results = {
-                        "count": sample_count,
-                        "mean": mean(thread_captures),
-                        "median": median(thread_captures),
-                        "stdev": None
-                    }
+                    thread_results = { "count": sample_count,
+                                       "mean": mean(thread_captures),
+                                       "median": median(thread_captures),
+                                       "stdev": None }
 
                 tag_captures.extend(thread_captures)
 
             sample_count = len(tag_captures)
             if sample_count > 1:
-                tag_results = {
-                    "name": tag,
-                    "super": tag_entry["super"],
-                    "count": len(tag_captures),
-                    "mean": mean(tag_captures),
-                    "median": median(tag_captures),
-                    "stdev": stdev(tag_captures)
-                }
+                tag_results = { "name": tag,
+                                "super": tag_entry["super"],
+                                "count": len(tag_captures),
+                                "mean": mean(tag_captures),
+                                "median": median(tag_captures),
+                                "stdev": stdev(tag_captures) }
+            
             elif sample_count == 1:
-                tag_results = {
-                    "name": tag,
-                    "super": tag_entry["super"],
-                    "count": len(tag_captures),
-                    "mean": mean(tag_captures),
-                    "median": median(tag_captures),
-                    "stdev": None
-                }
+                tag_results = { "name": tag,
+                                "super": tag_entry["super"],
+                                "count": len(tag_captures),
+                                "mean": mean(tag_captures),
+                                "median": median(tag_captures),
+                                "stdev": None }
 
             results[tag] = tag_results
 
@@ -555,6 +508,8 @@ class Profiler:
 
 profile = Profiler.get_profiler
 
+# The base-256 table is likely to change. Currently, it is just
+# experimental, so don't count on it too much just yet.
 b256 = [
 # 0   1   2   3   4   5   6   7   8   9   A   B   C   D   F   F
  "a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p",  # 0x0 Latin & numerals
@@ -575,4 +530,27 @@ b256 = [
  "𐌳","𐌸","𐌾","𐐀","𐐁","𐐂","𐐆","𐐇","𐐈","𐐉","𐐊","𐐋","𐐌","𐐍","𐐎","𐐏", # 0xF Gothic & Deseret
 ]
 
-def b256_rep(input_byte): return b256[int(input_byte)]
+def b256rep(data):       return "".join(bytes_to_b256(data))
+def prettyb256rep(data): return f"<{b256rep(data)}>"
+
+def b256_to_byte(point):
+    if not type(point) == str or not len(point) == 1: raise TypeError("Invalid input data for base256 byte decode")
+    try: return b256.index(point)
+    except Exception as e: raise ValueError(f"Could not decode base256 byte: {e}")
+
+def b256_to_bytes(b256rep):
+    if not type(b256rep) == str: raise TypeError("Invalid input data for base256 decode")
+    try: return bytes([b256.index(c) for c in b256rep])
+    except Exception as e: raise ValueError(f"Could not decode base256: {e}")
+
+def byte_to_b256(input_byte):
+    if type(input_byte) == bytes and not len(input_byte) == 1: TypeError("Invalid input data for base256 byte encode")
+    if type(input_byte) == bytes and len(input_byte) == 1: input_byte = ord(input_byte)
+    if not type(input_byte) == int: raise TypeError("Invalid input data for base256 byte encode")
+    try: return b256[int(input_byte)]
+    except Exception as e: raise TypeError(f"Could not encode byte to base256: {e}")
+
+def bytes_to_b256(data):
+    if not type(data) == bytes: raise TypeError("Invalid input data for base256 encode")
+    try: return [byte_to_b256(c) for c in data]
+    except Exception as e: raise TypeError(f"Could not encode to base256: {e}")
