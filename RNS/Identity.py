@@ -816,13 +816,11 @@ class Identity:
 
         :param target_value: The minimum value of the generated stamp as *int*.
         :param background: Whether or not to run stamp generation in the background. Defaults to *True*.
-        :returns: *True* if stamp generation was initiated, or if not running in background, *True* once generation completes. Will return *False* if stamp generation could not be started.
+        :returns: *True* if stamp generation was initiated, or if not running in background, *True* once generation completes.
         """
         with self.stamp_lock:
-            if self.__stamp_generating: return False
-            else:
-                # TODO: Implement
-                pass
+            if self.__stamp_generating: pass
+            else:                       self.__generate_stamp()
 
         if not background:
             while self.stamp_status == Identity.STAMP_GENERATING: time.sleep(0.2)
@@ -843,6 +841,14 @@ class Identity:
 
     @property
     def stamp_value(self):
+        # TODO: Implement
+        pass
+
+    def __generate_stamp(self):
+        # TODO: Implement
+        pass
+
+    def __validate_stamp(self):
         # TODO: Implement
         pass
 
