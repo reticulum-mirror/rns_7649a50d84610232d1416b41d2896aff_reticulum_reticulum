@@ -61,8 +61,12 @@ def use_epoll():
     else: return False
 
 def use_kqueue():
-    if is_freebsd(): return True
-    else: return False
+    if not is_freebsd(): return False
+    else:
+        try: import select
+        except: return False
+        if not hasattr(select, "kqueue"): return False
+        else:                             return True
 
 def use_af_unix():
     if is_linux() or is_freebsd() or is_android(): return True

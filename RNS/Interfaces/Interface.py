@@ -378,3 +378,10 @@ class Interface:
             except Exception as e:
                 RNS.log(f"Could not parse supplied configuration data. The contained exception was: {e}", RNS.LOG_ERROR)
                 raise SystemError("Invalid configuration data supplied")
+
+    @staticmethod
+    def async_backend_available(self):
+        if   RNS.platformutils.is_linux():   return RNS.vendor.platformutils.use_epoll()
+        elif RNS.platformutils.is_android(): return RNS.vendor.platformutils.use_epoll()
+        elif RNS.platformutils.is_freebsd(): return RNS.vendor.platformutils.use_kqueue()
+        else:                                return False
