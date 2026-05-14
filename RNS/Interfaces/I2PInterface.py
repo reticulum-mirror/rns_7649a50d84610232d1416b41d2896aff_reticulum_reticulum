@@ -465,6 +465,8 @@ class I2PInterfacePeer(Interface):
                 self.set_timeouts_linux()
             elif platform.system() == "Darwin":
                 self.set_timeouts_osx()
+            elif platform.system() == "FreeBSD":
+                self.set_timeouts_freebsd()
 
         elif target_i2p_dest != None:
             self.receives    = True
@@ -534,6 +536,12 @@ class I2PInterfacePeer(Interface):
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         self.socket.setsockopt(socket.IPPROTO_TCP, TCP_KEEPIDLE, int(I2PInterfacePeer.I2P_PROBE_AFTER))
     
+    def set_timeouts_freebsd(self):
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, int(I2PInterfacePeer.I2P_PROBE_AFTER))
+        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, int(I2PInterfacePeer.I2P_PROBE_INTERVAL))
+        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, int(I2PInterfacePeer.I2P_PROBES))
+
     def shutdown_socket(self, target_socket):
         if callable(target_socket.close):
             try:
@@ -588,6 +596,8 @@ class I2PInterfacePeer(Interface):
             self.set_timeouts_linux()
         elif platform.system() == "Darwin":
             self.set_timeouts_osx()
+        elif platform.system() == "FreeBSD":
+            self.set_timeouts_freebsd()
         
         self.online  = True
         self.writing = False
