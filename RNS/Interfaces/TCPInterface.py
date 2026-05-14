@@ -31,7 +31,6 @@
 from RNS.Interfaces.Interface import Interface
 import socketserver
 import threading
-import platform
 import socket
 import time
 import sys
@@ -141,12 +140,9 @@ class TCPClientInterface(Interface):
             self.target_port = None
             self.socket      = connected_socket
 
-            if platform.system() == "Linux":
-                self.set_timeouts_linux()
-            elif platform.system() == "Darwin":
-                self.set_timeouts_osx()
-            elif platform.system() == "FreeBSD":
-                self.set_timeouts_freebsd()
+            if   RNS.vendor.platformutils.is_linux():   self.set_timeouts_linux()
+            elif RNS.vendor.platformutils.is_darwin():  self.set_timeouts_osx()
+            elif RNS.vendor.platformutils.is_freebsd(): self.set_timeouts_freebsd()
 
             self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
@@ -271,12 +267,9 @@ class TCPClientInterface(Interface):
             else:
                 raise e
 
-        if platform.system() == "Linux":
-            self.set_timeouts_linux()
-        elif platform.system() == "Darwin":
-            self.set_timeouts_osx()
-        elif platform.system() == "FreeBSD":
-            self.set_timeouts_freebsd()
+        if   RNS.vendor.platformutils.is_linux():   self.set_timeouts_linux()
+        elif RNS.vendor.platformutils.is_darwin():  self.set_timeouts_osx()
+        elif RNS.vendor.platformutils.is_freebsd(): self.set_timeouts_freebsd()
         
         self.online  = True
         self.writing = False
