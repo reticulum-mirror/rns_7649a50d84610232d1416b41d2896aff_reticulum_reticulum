@@ -67,11 +67,13 @@ class LocalClientInterface(Interface):
     def __init__(self, owner, name, target_port = None, connected_socket=None, socket_path=None):
         super().__init__()
 
-        self.epoll_backend    = False
+        self.async_backend    = self.async_backend_available()
         self.HW_MTU           = 262144
         self.online           = False
         
-        if socket_path != None and RNS.Reticulum.get_instance().use_af_unix: self.socket_path = f"\0rns/{socket_path}"
+        if socket_path != None and RNS.Reticulum.get_instance().use_af_unix:
+            if not RNS.vendor.platformutils.is_freebsd(): self.socket_path = f"\0rns/{socket_path}"
+            else:                                         self.socket_path = socket_path
         else: self.socket_path = None
         
         self.IN               = True
@@ -85,8 +87,6 @@ class LocalClientInterface(Interface):
         self.mode             = RNS.Interfaces.Interface.Interface.MODE_FULL
         self.frame_buffer     = b""
         self.transmit_buffer  = b""
-
-        if RNS.vendor.platformutils.use_epoll(): self.epoll_backend = True
 
         self.pause_on_client_sleep = False
 
@@ -129,7 +129,7 @@ class LocalClientInterface(Interface):
         self.announce_rate_penalty = None
 
         if connected_socket == None:
-            if not self.epoll_backend:
+            if not self.async_backend:
                 thread = threading.Thread(target=self.read_loop)
                 thread.daemon = True
                 thread.start()
@@ -152,7 +152,7 @@ class LocalClientInterface(Interface):
         self.never_connected = False
 
         if RNS.vendor.platformutils.is_android(): self.phy_keepalive = True
-        if self.epoll_backend: BackboneInterface.add_client_socket(self.socket, self)
+        if self.async_backend: BackboneInterface.add_client_socket(self.socket, self)
 
         return True
 
@@ -177,7 +177,7 @@ class LocalClientInterface(Interface):
                     RNS.log("Reconnected socket for "+str(self)+".", RNS.LOG_INFO)
 
                 self.reconnecting = False
-                if not self.epoll_backend:
+                if not self.async_backend:
                     thread = threading.Thread(target=self.read_loop)
                     thread.daemon = True
                     thread.start()
@@ -196,7 +196,7 @@ class LocalClientInterface(Interface):
         if self.online:
             RNS.log(f"Sending keepalive on {self}", RNS.LOG_DEBUG) # TODO: Remove
             try:
-                if self.epoll_backend:
+                if self.async_backend:
                     self.transmit_buffer += bytes([HDLC.FLAG])+bytes([HDLC.FLAG])
                     BackboneInterface.tx_ready(self)
 
@@ -224,7 +224,7 @@ class LocalClientInterface(Interface):
 
         if self.online:
             try:
-                if self.epoll_backend:
+                if self.async_backend:
                     self.transmit_buffer += bytes([HDLC.FLAG])+HDLC.escape(data)+bytes([HDLC.FLAG])
                     BackboneInterface.tx_ready(self)
 
@@ -380,11 +380,13 @@ class LocalServerInterface(Interface):
 
     def __init__(self, owner, bindport=None, socket_path=None):
         super().__init__()
-        self.epoll_backend = False
+        self.async_backend = self.async_backend_available()
         self.online = False
         self.clients = 0
         
-        if socket_path != None and RNS.Reticulum.get_instance().use_af_unix: self.socket_path = f"\0rns/{socket_path}"
+        if socket_path != None and RNS.Reticulum.get_instance().use_af_unix:
+            if not RNS.vendor.platformutils.is_freebsd(): self.socket_path = f"\0rns/{socket_path}"
+            else:                                         self.socket_path = socket_path
         else: self.socket_path = None
         
         self.IN  = True
@@ -392,10 +394,7 @@ class LocalServerInterface(Interface):
         self.name = "Reticulum"
         self.mode = RNS.Interfaces.Interface.Interface.MODE_FULL
 
-        if RNS.vendor.platformutils.use_epoll():
-            self.epoll_backend = True
-
-        if socket_path != None and self.epoll_backend:
+        if socket_path != None and self.async_backend:
             self.receives = True
             self.bind_ip = None
             self.bind_port = None
@@ -413,7 +412,7 @@ class LocalServerInterface(Interface):
             self.is_local_shared_instance = True
 
             address = (self.bind_ip, self.bind_port)
-            if self.epoll_backend: BackboneInterface.add_listener(self, address)
+            if self.async_backend: BackboneInterface.add_listener(self, address)
             else:
                 def handlerFactory(callback):
                     def createHandler(*args, **keys):
@@ -434,7 +433,7 @@ class LocalServerInterface(Interface):
         self.online = True
 
     def incoming_connection(self, handler):
-        if self.epoll_backend:
+        if self.async_backend:
             client_socket = handler
             if client_socket.family == socket.AF_INET:
                 interface_name = str(str(client_socket.getpeername()[1]))
