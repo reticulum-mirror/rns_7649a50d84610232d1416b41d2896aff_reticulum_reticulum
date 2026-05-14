@@ -1535,9 +1535,9 @@ class TCPConnection():
 
             RNS.log(f"TCP connection to device for {self.owner} established", RNS.LOG_DEBUG)
 
-            if RNS.vendor.platformutils.is_linux():    self.set_timeouts_linux()
+            if RNS.vendor.platformutils.is_linux():     self.set_timeouts_linux()
             elif RNS.vendor.platformutils.is_freebsd(): self.set_timeouts_freebsd()
-            elif RNS.vendor.platformutils.is_darwin(): self.set_timeouts_osx()
+            elif RNS.vendor.platformutils.is_darwin():  self.set_timeouts_osx()
 
             return True
         
