@@ -54,10 +54,13 @@ class BackboneInterface(Interface):
     DEFAULT_IFAC_SIZE = 16
     AUTOCONFIGURE_MTU = True
 
-    epoll = None
     listener_filenos = {}
     spawned_interface_filenos = {}
-    epoll = None
+
+    HAS_EPOLL = Interface.epoll_backend_available()
+    HAS_KQUEUE = Interface.kqueue_backend_available()
+    event_backend = None
+
     _job_active = False
     _job_lock = threading.Lock()
 
@@ -104,8 +107,8 @@ class BackboneInterface(Interface):
         return len(self.spawned_interfaces)
 
     def __init__(self, owner, configuration):
-        if not RNS.vendor.platformutils.is_linux() and not RNS.vendor.platformutils.is_android():
-            raise OSError("BackboneInterface is only supported on Linux-based operating systems")
+        if  not RNS.vendor.platformutils.is_linux() and not RNS.vendor.platformutils.is_freebsd() and not RNS.vendor.platformutils.is_android():
+            raise OSError("BackboneInterface is only supported on Linux-based or FreeBSD operating systems")
 
         super().__init__()
 
@@ -213,12 +216,17 @@ class BackboneInterface(Interface):
         if not BackboneInterface._job_active: threading.Thread(target=BackboneInterface.__job, daemon=True).start()
 
     @staticmethod
-    def ensure_epoll():
-        if not BackboneInterface.epoll: BackboneInterface.epoll = select.epoll()
+    def ensure_backend():
+        if not BackboneInterface.event_backend:
+            if   BackboneInterface.HAS_EPOLL:  BackboneInterface.event_backend = select.epoll()
+            elif BackboneInterface.HAS_KQUEUE: BackboneInterface.event_backend = select.kqueue()
+            else:
+                RNS.log("No valid event backend available for BackboneInterface I/O", RNS.LOG_CRITICAL)
+                RNS.panic()
 
     @staticmethod
     def add_listener(interface, bind_address, socket_type=socket.AF_INET):
-        BackboneInterface.ensure_epoll()
+        BackboneInterface.ensure_backend()
         if socket_type == socket.AF_INET:
             server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -235,12 +243,17 @@ class BackboneInterface(Interface):
         server_socket.listen(1)
         server_socket.setblocking(0)
         BackboneInterface.listener_filenos[server_socket.fileno()] = (interface, server_socket)
-        BackboneInterface.epoll.register(server_socket.fileno(), select.EPOLLIN)
+        if   BackboneInterface.HAS_EPOLL: BackboneInterface.event_backend.register(server_socket.fileno(), select.EPOLLIN)
+        elif BackboneInterface.HAS_KQUEUE:
+            evt = select.kevent(server_socket.fileno(), select.KQ_FILTER_READ, select.KQ_EV_ADD)
+            BackboneInterface.event_backend.control([evt], 0)
+        else: RNS.log(f"No valid event backend available for BackboneInterface while adding listener", RNS.LOG_ERROR)
+
         BackboneInterface.start()
 
     @staticmethod
     def add_client_socket(client_socket, interface):
-        BackboneInterface.ensure_epoll()
+        BackboneInterface.ensure_backend()
         BackboneInterface.spawned_interface_filenos[client_socket.fileno()] = interface
         BackboneInterface.register_in(client_socket.fileno())
         BackboneInterface.start()
@@ -251,7 +264,11 @@ class BackboneInterface(Interface):
             RNS.log(f"Attempt to register invalid file descriptor {fileno}", RNS.LOG_WARNING)
             return
 
-        try: BackboneInterface.epoll.register(fileno, select.EPOLLIN)
+        try:
+            if BackboneInterface.HAS_EPOLL: BackboneInterface.event_backend.register(fileno, select.EPOLLIN)
+            else:
+                evt = select.kevent(fileno, select.KQ_FILTER_READ, select.KQ_EV_ADD)
+                BackboneInterface.event_backend.control([evt], 0)
         except Exception as e:
             RNS.log(f"An error occurred while registering EPOLL_IN for file descriptor {fileno}: {e}", RNS.LOG_WARNING)
 
@@ -261,9 +278,25 @@ class BackboneInterface(Interface):
             RNS.log(f"Attempt to deregister invalid file descriptor {fileno}", RNS.LOG_WARNING)
             return
 
-        try: BackboneInterface.epoll.unregister(fileno)
-        except Exception as e:
-            RNS.log(f"An error occurred while deregistering file descriptor {fileno}: {e}", RNS.LOG_DEBUG)
+        if BackboneInterface.HAS_EPOLL:
+            try: BackboneInterface.event_backend.unregister(fileno)
+            except Exception as e:
+                RNS.log(f"An error occurred while deregistering file descriptor {fileno}: {e}", RNS.LOG_DEBUG)
+
+        elif BackboneInterface.HAS_KQUEUE:
+            try:
+                if BackboneInterface.HAS_EPOLL: BackboneInterface.event_backend.unregister(fileno)
+                else:
+                    evts = [ select.kevent(fileno, select.KQ_FILTER_READ, select.KQ_EV_DELETE),
+                             select.kevent(fileno, select.KQ_FILTER_WRITE, select.KQ_EV_DELETE) ]
+                    BackboneInterface.event_backend.control(evts, 0)
+
+            except FileNotFoundError as e: pass
+            except OSError as e:
+                if getattr(e, 'errno', None) == 2: pass # ENOENT
+                else: RNS.log(f"An error occurred while deregistering file descriptor {fileno}: {e}", RNS.LOG_WARNING)
+
+        else: RNS.log(f"No valid event backend available for BackboneInterface while adding listener", RNS.LOG_ERROR)
 
     @staticmethod
     def deregister_listeners():
@@ -280,10 +313,25 @@ class BackboneInterface(Interface):
         if interface.socket:
             fileno = interface.socket.fileno()
             if fileno in BackboneInterface.spawned_interface_filenos:
-                try: BackboneInterface.epoll.modify(fileno, select.EPOLLOUT)
-                except Exception as e:
-                    RNS.log(f"Error occurred on {interface} while modifying socket EPOLL state: {e}", RNS.LOG_WARNING)
-                    raise e
+                if BackboneInterface.HAS_EPOLL:
+                    try: BackboneInterface.event_backend.modify(fileno, select.EPOLLOUT)
+                    except Exception as e:
+                        RNS.log(f"Error occurred on {interface} while modifying socket EPOLL state: {e}", RNS.LOG_WARNING)
+                        raise e
+
+                elif BackboneInterface.HAS_KQUEUE:
+                    try:
+                        evts = [ select.kevent(fileno, select.KQ_FILTER_READ, select.KQ_EV_DELETE),
+                                 select.kevent(fileno, select.KQ_FILTER_WRITE, select.KQ_EV_ADD) ]
+                        BackboneInterface.event_backend.control(evts, 0)
+                    except FileNotFoundError as e: pass
+                    except Exception as e:
+                        if type(e) == OSError and getattr(e, 'errno', None) == 2: pass # ENOENT
+                        else:
+                            RNS.log(f"Error occurred on {interface} while modifying socket state: {e}", RNS.LOG_WARNING)
+                            raise e
+
+                else: RNS.log(f"No valid event backend available for BackboneInterface on TX ready", RNS.LOG_ERROR)
 
     @staticmethod
     def __job():
@@ -291,15 +339,35 @@ class BackboneInterface(Interface):
             if BackboneInterface._job_active: return
             else:
                 BackboneInterface._job_active = True
-                BackboneInterface.ensure_epoll()
+                BackboneInterface.ensure_backend()
                 try:
                     while True:
-                        events = BackboneInterface.epoll.poll(1)
-                        for fileno, event in BackboneInterface.epoll.poll(1):
+                        if BackboneInterface.HAS_EPOLL:    events = BackboneInterface.event_backend.poll(1)
+                        elif BackboneInterface.HAS_KQUEUE: events = BackboneInterface.event_backend.control([], 1024, 1.0)
+                        else:                              events = []
+
+                        for e in events:
+                            if BackboneInterface.HAS_EPOLL:
+                                fileno, event = e
+                                is_read  = bool(event & select.EPOLLIN)
+                                is_write = bool(event & select.EPOLLOUT)
+                                is_hup   = bool(event & (select.EPOLLHUP | select.EPOLLERR))
+                            
+                            elif BackboneInterface.HAS_KQUEUE:
+                                fileno = e.ident
+                                is_read  = e.filter == select.KQ_FILTER_READ
+                                is_write = e.filter == select.KQ_FILTER_WRITE
+                                is_hup   = bool(e.flags & (select.KQ_EV_EOF | select.KQ_EV_ERROR))
+
+                            else:
+                                RNS.log(f"No valid event backend available for BackboneInterface in event loop", RNS.LOG_ERROR)
+                                continue
+
                             if fileno in BackboneInterface.spawned_interface_filenos:
                                 spawned_interface = BackboneInterface.spawned_interface_filenos[fileno]
                                 client_socket = spawned_interface.socket
-                                if client_socket and fileno == client_socket.fileno() and (event & select.EPOLLIN):
+                                if client_socket and fileno == client_socket.fileno() and is_read:
+
                                     try: received_bytes = client_socket.recv(spawned_interface.HW_MTU)
                                     except Exception as e:
                                         RNS.log(f"Error while reading from {spawned_interface}: {e}", RNS.LOG_DEBUG)
@@ -321,7 +389,7 @@ class BackboneInterface(Interface):
 
                                         spawned_interface.receive(received_bytes)
                                 
-                                elif client_socket and fileno == client_socket.fileno() and (event & select.EPOLLOUT):
+                                elif client_socket and fileno == client_socket.fileno() and is_write:
                                     try: written = client_socket.send(spawned_interface.transmit_buffer)
                                     except Exception as e:
                                         written = 0
@@ -345,14 +413,19 @@ class BackboneInterface(Interface):
 
                                     spawned_interface.transmit_buffer = spawned_interface.transmit_buffer[written:]
                                     try:
-                                        if len(spawned_interface.transmit_buffer) == 0: BackboneInterface.epoll.modify(fileno, select.EPOLLIN)
-                                    except Exception as e:
-                                        RNS.log(f"Error while setting EPOLLIN on {spawned_interface}: {e}", RNS.LOG_ERROR)
+                                        if len(spawned_interface.transmit_buffer) == 0:
+                                            if   BackboneInterface.HAS_EPOLL: BackboneInterface.event_backend.modify(fileno, select.EPOLLIN)
+                                            elif BackboneInterface.HAS_KQUEUE:
+                                                evts = [ select.kevent(fileno, select.KQ_FILTER_WRITE, select.KQ_EV_DELETE),
+                                                         select.kevent(fileno, select.KQ_FILTER_READ, select.KQ_EV_ADD) ]
+                                                BackboneInterface.event_backend.control(evts, 0)
+                                            else: RNS.log("No valid event backend available for BackboneInterface at write complete", RNS.LOG_ERROR)
+                                    except Exception as e: RNS.log(f"Error while setting EPOLLIN on {spawned_interface}: {e}", RNS.LOG_ERROR)
 
                                     spawned_interface.txb += written
                                     if spawned_interface.parent_interface: spawned_interface.parent_interface.txb += written
                                 
-                                elif client_socket and fileno == client_socket.fileno() and event & (select.EPOLLHUP):
+                                elif client_socket and fileno == client_socket.fileno() and is_hup:
                                     BackboneInterface.deregister_fileno(fileno)
                                     try:
                                         if fileno in BackboneInterface.spawned_interface_filenos: BackboneInterface.spawned_interface_filenos.pop(fileno)
@@ -371,7 +444,7 @@ class BackboneInterface(Interface):
 
                             elif fileno in BackboneInterface.listener_filenos:
                                 owner_interface, server_socket = BackboneInterface.listener_filenos[fileno]
-                                if fileno == server_socket.fileno() and (event & select.EPOLLIN):
+                                if fileno == server_socket.fileno() and is_read:
                                     try:
                                         client_socket, address = server_socket.accept()
                                         client_socket.setblocking(0)
@@ -384,7 +457,7 @@ class BackboneInterface(Interface):
                                         try: client_socket.close()
                                         except Exception as e: RNS.log(f"Error while closing socket for failed incoming socket accept: {e}", RNS.LOG_WARNING)
                                 
-                                elif fileno == server_socket.fileno() and (event & select.EPOLLHUP):
+                                elif fileno == server_socket.fileno() and is_hup:
                                     try: BackboneInterface.deregister_fileno(fileno)
                                     except Exception as e: RNS.log(f"Error while deregistering listener file descriptor {fileno}: {e}", RNS.LOG_ERROR)
 
@@ -562,7 +635,9 @@ class BackboneClientInterface(Interface):
             self.target_port = None
             self.socket      = connected_socket
 
-            self.set_timeouts_linux()
+            if RNS.vendor.platformutils.is_linux():     self.set_timeouts_linux()
+            elif RNS.vendor.platformutils.is_freebsd(): self.set_timeouts_freebsd()
+
             self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
         elif target_ip != None and target_port != None:
@@ -593,6 +668,12 @@ class BackboneClientInterface(Interface):
 
     def set_timeouts_linux(self):
         self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT, int(BackboneClientInterface.TCP_USER_TIMEOUT * 1000))
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, int(BackboneClientInterface.TCP_PROBE_AFTER))
+        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, int(BackboneClientInterface.TCP_PROBE_INTERVAL))
+        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, int(BackboneClientInterface.TCP_PROBES))
+
+    def set_timeouts_freebsd(self):
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, int(BackboneClientInterface.TCP_PROBE_AFTER))
         self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, int(BackboneClientInterface.TCP_PROBE_INTERVAL))
@@ -654,7 +735,8 @@ class BackboneClientInterface(Interface):
             else:
                 raise e
 
-        self.set_timeouts_linux()
+        if RNS.vendor.platformutils.is_linux():     self.set_timeouts_linux()
+        elif RNS.vendor.platformutils.is_freebsd(): self.set_timeouts_freebsd()
         
         self.online  = True
         self.never_connected = False
