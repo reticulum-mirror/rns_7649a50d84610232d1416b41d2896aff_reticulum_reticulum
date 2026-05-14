@@ -40,6 +40,10 @@ def is_linux():
     if get_platform() == "linux": return True
     else: return False
 
+def is_freebsd():
+    if "freebsd" in get_platform(): return True
+    else: return False
+
 def is_darwin():
     if get_platform() == "darwin": return True
     else: return False
@@ -56,8 +60,12 @@ def use_epoll():
     if is_linux() or is_android(): return True
     else: return False
 
+def use_kqueue():
+    if is_freebsd(): return True
+    else: return False
+
 def use_af_unix():
-    if is_linux() or is_android(): return True
+    if is_linux() or is_freebsd() or is_android(): return True
     else: return False
 
 def platform_checks():
