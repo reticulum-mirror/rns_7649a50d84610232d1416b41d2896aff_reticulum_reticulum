@@ -145,6 +145,8 @@ class TCPClientInterface(Interface):
                 self.set_timeouts_linux()
             elif platform.system() == "Darwin":
                 self.set_timeouts_osx()
+            elif platform.system() == "FreeBSD":
+                self.set_timeouts_freebsd()
 
             self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
@@ -205,6 +207,20 @@ class TCPClientInterface(Interface):
             self.socket.setsockopt(socket.IPPROTO_TCP, TCP_KEEPIDLE, int(TCPClientInterface.TCP_PROBE_AFTER))
         else:
             self.socket.setsockopt(socket.IPPROTO_TCP, TCP_KEEPIDLE, int(TCPClientInterface.I2P_PROBE_AFTER))
+
+    def set_timeouts_freebsd(self):
+        if not self.i2p_tunneled:
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, int(TCPClientInterface.TCP_PROBE_AFTER))
+            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, int(TCPClientInterface.TCP_PROBE_INTERVAL))
+            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, int(TCPClientInterface.TCP_PROBES))
+
+        else:
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, int(TCPClientInterface.I2P_PROBE_AFTER))
+            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, int(TCPClientInterface.I2P_PROBE_INTERVAL))
+            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, int(TCPClientInterface.I2P_PROBES))
+
         
     def detach(self):
         self.online = False
@@ -259,6 +275,8 @@ class TCPClientInterface(Interface):
             self.set_timeouts_linux()
         elif platform.system() == "Darwin":
             self.set_timeouts_osx()
+        elif platform.system() == "FreeBSD":
+            self.set_timeouts_freebsd()
         
         self.online  = True
         self.writing = False
