@@ -68,7 +68,7 @@ def use_epoll():
     else: return False
 
 def use_kqueue():
-    if not is_freebsd(): return False
+    if not is_bsd(): return False
     else:
         try: import select
         except: return False

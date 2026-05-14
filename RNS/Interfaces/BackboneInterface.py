@@ -675,9 +675,10 @@ class BackboneClientInterface(Interface):
 
     def set_timeouts_bsd(self):
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, int(BackboneClientInterface.TCP_PROBE_AFTER))
-        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, int(BackboneClientInterface.TCP_PROBE_INTERVAL))
-        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, int(BackboneClientInterface.TCP_PROBES))
+        if RNS.vendor.platformutils.is_freebsd():
+          self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, int(BackboneClientInterface.TCP_PROBE_AFTER))
+          self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, int(BackboneClientInterface.TCP_PROBE_INTERVAL))
+          self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, int(BackboneClientInterface.TCP_PROBES))
 
     def detach(self):
         self.online = False
