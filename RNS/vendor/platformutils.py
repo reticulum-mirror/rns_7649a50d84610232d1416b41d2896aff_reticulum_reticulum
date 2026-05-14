@@ -40,6 +40,13 @@ def is_linux():
     if get_platform() == "linux": return True
     else: return False
 
+def is_bsd():
+    return is_openbsd() or is_freebsd()
+
+def is_openbsd():
+    if "openbsd" in get_platform(): return True
+    else: return False
+
 def is_freebsd():
     if "freebsd" in get_platform(): return True
     else: return False

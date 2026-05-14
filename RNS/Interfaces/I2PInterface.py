@@ -460,9 +460,9 @@ class I2PInterfacePeer(Interface):
             self.target_port = None
             self.socket      = connected_socket
 
-            if   RNS.vendor.platformutils.is_linux():   self.set_timeouts_linux()
-            elif RNS.vendor.platformutils.is_freebsd(): self.set_timeouts_freebsd()
-            elif RNS.vendor.platformutils.is_darwin():  self.set_timeouts_osx()
+            if   RNS.vendor.platformutils.is_linux():  self.set_timeouts_linux()
+            elif RNS.vendor.platformutils.is_bsd():    self.set_timeouts_bsd()
+            elif RNS.vendor.platformutils.is_darwin(): self.set_timeouts_osx()
 
         elif target_i2p_dest != None:
             self.receives    = True
@@ -532,7 +532,7 @@ class I2PInterfacePeer(Interface):
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         self.socket.setsockopt(socket.IPPROTO_TCP, TCP_KEEPIDLE, int(I2PInterfacePeer.I2P_PROBE_AFTER))
     
-    def set_timeouts_freebsd(self):
+    def set_timeouts_bsd(self):
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, int(I2PInterfacePeer.I2P_PROBE_AFTER))
         self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, int(I2PInterfacePeer.I2P_PROBE_INTERVAL))
@@ -588,9 +588,9 @@ class I2PInterfacePeer(Interface):
             else:
                 raise e
 
-        if   RNS.vendor.platformutils.is_linux():   self.set_timeouts_linux()
-        elif RNS.vendor.platformutils.is_freebsd(): self.set_timeouts_freebsd()
-        elif RNS.vendor.platformutils.is_darwin():  self.set_timeouts_osx()
+        if   RNS.vendor.platformutils.is_linux():  self.set_timeouts_linux()
+        elif RNS.vendor.platformutils.is_bsd():    self.set_timeouts_bsd()
+        elif RNS.vendor.platformutils.is_darwin(): self.set_timeouts_osx()
         
         self.online  = True
         self.writing = False

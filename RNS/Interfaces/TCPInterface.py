@@ -140,9 +140,9 @@ class TCPClientInterface(Interface):
             self.target_port = None
             self.socket      = connected_socket
 
-            if   RNS.vendor.platformutils.is_linux():   self.set_timeouts_linux()
-            elif RNS.vendor.platformutils.is_darwin():  self.set_timeouts_osx()
-            elif RNS.vendor.platformutils.is_freebsd(): self.set_timeouts_freebsd()
+            if   RNS.vendor.platformutils.is_linux():  self.set_timeouts_linux()
+            elif RNS.vendor.platformutils.is_darwin(): self.set_timeouts_osx()
+            elif RNS.vendor.platformutils.is_bsd():    self.set_timeouts_bsd()
 
             self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
@@ -204,7 +204,7 @@ class TCPClientInterface(Interface):
         else:
             self.socket.setsockopt(socket.IPPROTO_TCP, TCP_KEEPIDLE, int(TCPClientInterface.I2P_PROBE_AFTER))
 
-    def set_timeouts_freebsd(self):
+    def set_timeouts_bsd(self):
         if not self.i2p_tunneled:
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
             self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, int(TCPClientInterface.TCP_PROBE_AFTER))
@@ -267,9 +267,9 @@ class TCPClientInterface(Interface):
             else:
                 raise e
 
-        if   RNS.vendor.platformutils.is_linux():   self.set_timeouts_linux()
-        elif RNS.vendor.platformutils.is_darwin():  self.set_timeouts_osx()
-        elif RNS.vendor.platformutils.is_freebsd(): self.set_timeouts_freebsd()
+        if   RNS.vendor.platformutils.is_linux():  self.set_timeouts_linux()
+        elif RNS.vendor.platformutils.is_darwin(): self.set_timeouts_osx()
+        elif RNS.vendor.platformutils.is_bsd():    self.set_timeouts_bsd()
         
         self.online  = True
         self.writing = False

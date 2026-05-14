@@ -107,8 +107,8 @@ class BackboneInterface(Interface):
         return len(self.spawned_interfaces)
 
     def __init__(self, owner, configuration):
-        if  not RNS.vendor.platformutils.is_linux() and not RNS.vendor.platformutils.is_freebsd() and not RNS.vendor.platformutils.is_android():
-            raise OSError("BackboneInterface is only supported on Linux-based or FreeBSD operating systems")
+        if  not RNS.vendor.platformutils.is_linux() and not RNS.vendor.platformutils.is_bsd() and not RNS.vendor.platformutils.is_android():
+            raise OSError("BackboneInterface is only supported on Linux-based or BSD operating systems")
 
         super().__init__()
 
@@ -635,8 +635,8 @@ class BackboneClientInterface(Interface):
             self.target_port = None
             self.socket      = connected_socket
 
-            if RNS.vendor.platformutils.is_linux():     self.set_timeouts_linux()
-            elif RNS.vendor.platformutils.is_freebsd(): self.set_timeouts_freebsd()
+            if   RNS.vendor.platformutils.is_linux(): self.set_timeouts_linux()
+            elif RNS.vendor.platformutils.is_bsd():   self.set_timeouts_bsd()
 
             self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
@@ -673,7 +673,7 @@ class BackboneClientInterface(Interface):
         self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, int(BackboneClientInterface.TCP_PROBE_INTERVAL))
         self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, int(BackboneClientInterface.TCP_PROBES))
 
-    def set_timeouts_freebsd(self):
+    def set_timeouts_bsd(self):
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, int(BackboneClientInterface.TCP_PROBE_AFTER))
         self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, int(BackboneClientInterface.TCP_PROBE_INTERVAL))
@@ -735,8 +735,8 @@ class BackboneClientInterface(Interface):
             else:
                 raise e
 
-        if RNS.vendor.platformutils.is_linux():     self.set_timeouts_linux()
-        elif RNS.vendor.platformutils.is_freebsd(): self.set_timeouts_freebsd()
+        if   RNS.vendor.platformutils.is_linux(): self.set_timeouts_linux()
+        elif RNS.vendor.platformutils.is_bsd():   self.set_timeouts_bsd()
         
         self.online  = True
         self.never_connected = False

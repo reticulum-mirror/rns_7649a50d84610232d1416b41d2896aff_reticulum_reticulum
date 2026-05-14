@@ -1501,7 +1501,7 @@ class TCPConnection():
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         self.socket.setsockopt(socket.IPPROTO_TCP, TCP_KEEPIDLE, int(self.TCP_PROBE_AFTER))
 
-    def set_timeouts_freebsd(self):
+    def set_timeouts_bsd(self):
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, int(self.TCP_PROBE_AFTER))
         self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, int(self.TCP_PROBE_INTERVAL))
@@ -1535,9 +1535,9 @@ class TCPConnection():
 
             RNS.log(f"TCP connection to device for {self.owner} established", RNS.LOG_DEBUG)
 
-            if RNS.vendor.platformutils.is_linux():     self.set_timeouts_linux()
-            elif RNS.vendor.platformutils.is_freebsd(): self.set_timeouts_freebsd()
-            elif RNS.vendor.platformutils.is_darwin():  self.set_timeouts_osx()
+            if RNS.vendor.platformutils.is_linux():    self.set_timeouts_linux()
+            elif RNS.vendor.platformutils.is_bsd():    self.set_timeouts_bsd()
+            elif RNS.vendor.platformutils.is_darwin(): self.set_timeouts_osx()
 
             return True
         

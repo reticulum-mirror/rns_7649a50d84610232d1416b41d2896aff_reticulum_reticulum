@@ -391,5 +391,5 @@ class Interface:
 
     @staticmethod
     def kqueue_backend_available():
-        if RNS.vendor.platformutils.is_freebsd():   return RNS.vendor.platformutils.use_kqueue()
+        if RNS.vendor.platformutils.is_bsd():       return RNS.vendor.platformutils.use_kqueue()
         else:                                       return False

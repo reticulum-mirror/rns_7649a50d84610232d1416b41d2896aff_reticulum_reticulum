@@ -338,7 +338,7 @@ class Reticulum:
         RNS.Transport.start(self)
 
         if self.use_af_unix:
-            if not RNS.vendor.platformutils.is_freebsd():
+            if not RNS.vendor.platformutils.is_bsd():
                 self.rpc_addr = f"\0rns/{self.local_socket_path}/rpc"
                 self.rpc_type = "AF_UNIX"
             else:
@@ -471,7 +471,7 @@ class Reticulum:
                     value = self.config["reticulum"].as_bool(option)
                     self.share_instance = value
                 
-                if RNS.vendor.platformutils.use_af_unix() and not RNS.vendor.platformutils.is_freebsd():
+                if RNS.vendor.platformutils.use_af_unix() and not RNS.vendor.platformutils.is_bsd():
                     if option == "instance_name":
                         value = self.config["reticulum"][option]
                         self.local_socket_path = value
@@ -667,8 +667,8 @@ class Reticulum:
             self.use_af_unix          = False
 
         if self.local_socket_path == None and self.use_af_unix:
-            if not RNS.vendor.platformutils.is_freebsd(): self.local_socket_path = "default"
-            else:                                         self.local_socket_path = Reticulum.configdir+"/socket"
+            if not RNS.vendor.platformutils.is_bsd(): self.local_socket_path = "default"
+            else:                                     self.local_socket_path = Reticulum.configdir+"/socket"
 
         self.__start_local_interface()
 

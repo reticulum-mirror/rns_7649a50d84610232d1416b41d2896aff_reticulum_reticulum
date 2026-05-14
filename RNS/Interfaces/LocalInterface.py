@@ -72,8 +72,8 @@ class LocalClientInterface(Interface):
         self.online           = False
         
         if socket_path != None and RNS.Reticulum.get_instance().use_af_unix:
-            if not RNS.vendor.platformutils.is_freebsd(): self.socket_path = f"\0rns/{socket_path}"
-            else:                                         self.socket_path = socket_path
+            if not RNS.vendor.platformutils.is_bsd(): self.socket_path = f"\0rns/{socket_path}"
+            else:                                     self.socket_path = socket_path
         else: self.socket_path = None
         
         self.IN               = True
@@ -385,8 +385,8 @@ class LocalServerInterface(Interface):
         self.clients = 0
         
         if socket_path != None and RNS.Reticulum.get_instance().use_af_unix:
-            if not RNS.vendor.platformutils.is_freebsd(): self.socket_path = f"\0rns/{socket_path}"
-            else:                                         self.socket_path = socket_path
+            if not RNS.vendor.platformutils.is_bsd(): self.socket_path = f"\0rns/{socket_path}"
+            else:                                     self.socket_path = socket_path
         else: self.socket_path = None
         
         self.IN  = True
