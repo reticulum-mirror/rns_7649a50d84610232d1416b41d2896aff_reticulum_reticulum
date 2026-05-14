@@ -380,8 +380,16 @@ class Interface:
                 raise SystemError("Invalid configuration data supplied")
 
     @staticmethod
-    def async_backend_available(self):
-        if   RNS.platformutils.is_linux():   return RNS.vendor.platformutils.use_epoll()
-        elif RNS.platformutils.is_android(): return RNS.vendor.platformutils.use_epoll()
-        elif RNS.platformutils.is_freebsd(): return RNS.vendor.platformutils.use_kqueue()
-        else:                                return False
+    def async_backend_available():
+        return Interface.epoll_backend_available() or Interface.kqueue_backend_available()
+
+    @staticmethod
+    def epoll_backend_available():
+        if   RNS.vendor.platformutils.is_linux():   return RNS.vendor.platformutils.use_epoll()
+        elif RNS.vendor.platformutils.is_android(): return RNS.vendor.platformutils.use_epoll()
+        else:                                       return False
+
+    @staticmethod
+    def kqueue_backend_available():
+        if RNS.vendor.platformutils.is_freebsd():   return RNS.vendor.platformutils.use_kqueue()
+        else:                                       return False
