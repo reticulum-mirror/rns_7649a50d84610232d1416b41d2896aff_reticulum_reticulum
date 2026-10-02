@@ -989,6 +989,10 @@ class Reticulum:
             discoverable = c.as_bool("discoverable")
             if discoverable:
                 Reticulum.__discovery_enabled = True
+                if not Reticulum.__static_transport_identity and not Reticulum.__transport_enabled:
+                    RNS.log(f"Discoverable interface was configured, enabling static transport identity on non-transport instance", RNS.LOG_WARNING)
+                    Reticulum.__static_transport_identity = True
+
                 if "announce_interval" in c:
                     discovery_announce_interval = c.as_int("announce_interval")*60
                     if discovery_announce_interval < 5*60: discovery_announce_interval = 5*60
