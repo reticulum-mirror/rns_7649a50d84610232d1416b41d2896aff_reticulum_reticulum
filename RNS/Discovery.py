@@ -780,6 +780,7 @@ class InterfaceDiscovery():
             return seq_name
 
     def autoconnect_qualified(self, info):
+        if not "transport" in info or info["transport"] != True:          return False
         if RNS.Reticulum.should_autoconnect_unverified_implementations(): return True
         if not "impl_name" in info:                                       return False
         if not info["impl_name"] in self.AUTOCONNECT_IMPLS:               return False
