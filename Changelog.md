@@ -1,10 +1,9 @@
-### 2026-10-02: RNS 1.5.6
+### 2026-10-05: RNS 1.5.7
 
-This maintenance release improves interface discovery handling.
+This maintenance release fixes a bug in the dataplane egress control handling.
 
 **Changes**
-- Fixed ephemeral transport identity being possible when discoverable interfaces are present on non-transport instances
-- Ensure only transport-enabled interfaces are autoconnected at discovery time
+- Fixed egress control TX stall state deadlock on BackboneInterface initiator instances
 
 **Verified Retrieval**
 You can retrieve and verify this release over Reticulum using the built-in `rngit release` utility. To retrieve only the installation `.whl` package, and the release manifest for future updates, you can use:
@@ -33,6 +32,14 @@ rnid -i bc7291552be7a58f361522990465165c -V rns_*.rsm *.rsg
 ```
 
 The `rnid` utility will then verify the signatures, and display whether they are valid. If the signature cannot be verified, the release has been tampered with and should be discarded.
+
+### 2026-10-02: RNS 1.5.6
+
+This maintenance release improves interface discovery handling.
+
+**Changes**
+- Fixed ephemeral transport identity being possible when discoverable interfaces are present on non-transport instances
+- Ensure only transport-enabled interfaces are autoconnected at discovery time
 
 ### 2026-09-29: RNS 1.5.5
 
