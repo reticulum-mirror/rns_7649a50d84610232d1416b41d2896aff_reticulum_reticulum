@@ -409,6 +409,14 @@ class BackboneInterface(Interface):
                         RNS.log(f"Holding for {RNS.prettyshorttime(hold, compact=True, tight=True)}, throttling handled in {RNS.prettyshorttime(taken, compact=True, tight=True)} at depth {q_depth}", RNS.LOG_DEBUG)
 
     @staticmethod
+    def _dp_ec_reset(interface):
+        interface._dp_ec_prev_sent  = 0
+        interface._dp_ec_zero_ticks = 0
+        interface._dp_ec_last_drain = time.time()
+        interface.transmit_buffer   = TransmitBuffer()
+        interface.tx_stalled        = False
+
+    @staticmethod
     def _dp_ec_evaluate(interface, now):
         tb = interface.transmit_buffer
         drained = tb._tx_sent - interface._dp_ec_prev_sent
@@ -434,6 +442,7 @@ class BackboneInterface(Interface):
                     except Exception as e: RNS.log(f"Egress control could not close socket for {interface}: {e}", RNS.LOG_ERROR)
             except Exception as e: RNS.log(f"Egress control cleanup error for {interface}: {e}", RNS.LOG_ERROR)
 
+            BackboneInterface._dp_ec_reset(interface)
             interface.receive(b"")
             return True
 
