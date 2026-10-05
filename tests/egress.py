@@ -1,4 +1,4 @@
-# Partially generated with lc/kimi_k2.6
+# Partially generated with lc/kimi_k2.6 and lc/deepseek_v4_flash_q8_k_xl
 # Reviewed and approved by Mark Qvist
 import unittest
 
@@ -202,5 +202,43 @@ class TestHWMLimiter(unittest.TestCase):
         self.assertEqual(iface.tx_drops, 1)
         self.assertEqual(iface.tx_dropped_bytes, len(framed(b"gated-frame")))
         self.assertEqual(len(iface.transmit_buffer), 0)
+
+    def test_12_ec_state_reset_on_teardown(self):
+        print("")
+        # When a dead peer escalates to teardown, the interface instance
+        # persists, but the socket is closed. On initiator interfaces the
+        # same instance is later re-registered on reconnection, so the
+        # egress-control state and transmit buffer must be reset at
+        # teardown.
+        tb = TransmitBuffer()
+        iface = FakeIF(tb)
+        while len(tb) <= BackboneInterface.DP_EC_MID_WM: tb.append(framed(b"y" * 4096))
+        iface._dp_ec_last_drain = 10.0
+        iface._dp_ec_zero_ticks = BackboneInterface.DP_EC_STALL_TICKS
+        iface.tx_stalled = True
+
+        escalated = BackboneInterface._dp_ec_evaluate(iface, 100.0)
+        self.assertTrue(escalated)
+        self.assertTrue(iface.torn_down)
+
+        # The persisted instance must be left in a clean post-teardown
+        # state, ready for the reconnection cycle to re-register and
+        # re-evaluate it.
+        self.assertEqual(iface._dp_ec_prev_sent, 0)
+        self.assertEqual(iface._dp_ec_zero_ticks, 0)
+        self.assertGreaterEqual(iface._dp_ec_last_drain, 100.0)
+        self.assertFalse(iface.tx_stalled)
+        self.assertIsNot(iface.transmit_buffer, tb)
+        self.assertEqual(len(iface.transmit_buffer), 0)
+
+        # Simulate the re-established connection: the same instance is
+        # evaluated again. A stale dead-drain state would re-trigger the
+        # teardown on this tick; a reset instance must not.
+        iface.torn_down = False # This is a bit janky, but will do for
+                                # now as a simulation.
+        re_escalated = BackboneInterface._dp_ec_evaluate(iface, 101.0)
+        self.assertFalse(re_escalated)
+        self.assertFalse(iface.torn_down)
+        self.assertFalse(iface.tx_stalled)
 
 if __name__ == "__main__": unittest.main(verbosity=2)
