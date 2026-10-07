@@ -2017,7 +2017,7 @@ class ReticulumGitNode():
                 if os.path.isdir("/etc/rngit") and os.path.isfile("/etc/rngit/config"):
                     self.configdir = "/etc/rngit"
                 elif os.path.isdir(self.userdir+"/.config/rngit") and os.path.isfile(self.userdir+"/.config/rngit/config"):
-                    self.configdir = self.userdir+"/.rngit/reticulum"
+                    self.configdir = self.userdir+"/.config/rngit"
                 else:
                     self.configdir = self.userdir+"/.rngit"
             
