@@ -500,6 +500,7 @@ class RNodeInterface(Interface):
         self.r_interference       = None
         self.r_interference_l     = None
         self.r_temperature        = None
+        self.reports_phy_stats    = True
 
         self.r_battery_state = RNodeInterface.BATTERY_STATE_UNKNOWN
         self.r_battery_percent = 0
