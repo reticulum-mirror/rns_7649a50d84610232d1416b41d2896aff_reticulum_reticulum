@@ -262,6 +262,7 @@ class RNodeInterface(Interface):
         self.r_st_alock  = None
         self.r_lt_alock  = None
         self.r_random    = None
+        self.r_modulation         = "LoRa"
         self.r_airtime_short      = 0.0
         self.r_airtime_long       = 0.0
         self.r_channel_load_short = 0.0

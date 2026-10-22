@@ -278,7 +278,7 @@ class RNodeMultiInterface(Interface):
         self.interface_ready = False
         self.announce_rate_target = None
         self.reports_phy_stats    = True
-
+        self.r_modulation         = "LoRa"
 
         self.validcfg  = True
         if id_interval != None and id_callsign != None:

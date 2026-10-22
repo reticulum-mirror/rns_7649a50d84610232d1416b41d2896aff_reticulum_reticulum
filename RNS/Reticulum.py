@@ -1535,6 +1535,16 @@ class Reticulum:
                     else:
                         ifstats["tunnelstate"] = None
 
+                if hasattr(interface, "r_stat_rssi"):          ifstats["rssi"] = interface.r_stat_rssi
+                if hasattr(interface, "r_stat_snr"):           ifstats["snr"] = interface.r_stat_snr
+                if hasattr(interface, "r_stat_q"):             ifstats["signal_quality"] = interface.r_stat_q
+                if hasattr(interface, "r_frequency"):          ifstats["frequency"] = interface.r_frequency
+                if hasattr(interface, "r_bandwidth"):          ifstats["bandwidth"] = interface.r_bandwidth
+                if hasattr(interface, "r_txpower"):            ifstats["txpower"] = interface.r_txpower
+                if hasattr(interface, "r_sf"):                 ifstats["sf"] = interface.r_sf
+                if hasattr(interface, "r_cr"):                 ifstats["cr"] = interface.r_cr
+                if hasattr(interface, "r_channel"):            ifstats["channel"] = interface.r_channel
+                if hasattr(interface, "modulation"):           ifstats["modulation"] = interface.modulation
                 if hasattr(interface, "r_airtime_short"):      ifstats["airtime_short"] = interface.r_airtime_short
                 if hasattr(interface, "r_airtime_long"):       ifstats["airtime_long"] = interface.r_airtime_long
                 if hasattr(interface, "r_channel_load_short"): ifstats["channel_load_short"] = interface.r_channel_load_short
