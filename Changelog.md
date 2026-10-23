@@ -1,3 +1,21 @@
+### RNS 1.6.0
+
+*Pending*.
+
+**Changes**
+- Added path usage tracking
+- Added automatic path table culling based on traffic and usage
+- Added unused path pool monitoring and handling
+- Added managed storage backend using SQLite
+- Added fallback to legacy file-based storage if SQLite is unavailable
+- Added managed storage for known destinations and ratchets
+- Added managed storage for cached announces
+- Added more comprehensive metrics to status output structure
+- Optimized announce rate table implementation
+- Optimized packet filter hashlist implementation
+- Fixed `RNodeInterface` phy stats regression on Android
+- Fixed `rngit` default config path typo for `~/.config/rngit` case
+
 ### 2026-10-05: RNS 1.5.7
 
 This maintenance release fixes a bug in the dataplane egress control handling.

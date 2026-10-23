@@ -1,6 +1,6 @@
 # Reticulum License
 #
-# Copyright (c) 2016-2025 Mark Qvist
+# Copyright (c) 2016-2026 Mark Qvist
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -40,6 +40,7 @@ from .vendor import umsgpack as umsgpack
 
 from RNS.Cryptography import X25519PrivateKey, X25519PublicKey, Ed25519PrivateKey, Ed25519PublicKey
 from RNS.Cryptography import Token
+from RNS.Storage import KnownDestinationsStore
 
 
 class Identity:
@@ -92,6 +93,7 @@ class Identity:
 
     # Storage
     known_destinations = {}
+    known_destinations_store = None
     known_ratchets = {}
 
     ratchet_persist_lock = threading.Lock()
@@ -104,13 +106,15 @@ class Identity:
         else:
             with Identity.known_destinations_lock:
                 if not destination_hash in Identity.known_destinations:
-                    Identity.known_destinations[destination_hash] = [time.time(), packet_hash, public_key, app_data, 0]
+                    Identity.known_destinations[destination_hash] = [time.time(), packet_hash, public_key, app_data, 0, None, 0]
                 else:
                     entry = Identity.known_destinations[destination_hash]
                     entry[0] = time.time()
                     entry[1] = packet_hash
                     entry[2] = public_key
                     entry[3] = app_data
+
+                Identity._kd_mark_dirty(destination_hash)
 
     @staticmethod
     def recall(target_hash, from_identity_hash=False, _no_use=False):
@@ -177,7 +181,12 @@ class Identity:
     def save_known_destinations(background=False, recombine=False):
         if recombine: RNS.log(f"Recombining known destinations from disk cache on persist is deprecated, argument ignored", RNS.LOG_WARNING)
         if RNS.Transport.owner.is_connected_to_shared_instance: return
-        
+
+        if Identity.known_destinations_store != None: Identity.flush_known_destinations()
+        else: Identity.save_known_destinations_legacy(background=background)
+
+    @staticmethod
+    def save_known_destinations_legacy(background=False):
         try:
             if hasattr(Identity, "saving_known_destinations"):
                 wait_interval = 0.2
@@ -214,6 +223,72 @@ class Identity:
 
     @staticmethod
     def load_known_destinations():
+        if RNS.Reticulum.get_instance().is_connected_to_shared_instance:
+            try:
+                store = KnownDestinationsStore(RNS.Reticulum.storagepath+"/known_destinations.db", hash_width=RNS.Reticulum.TRUNCATED_HASHLENGTH//8, read_only=True)
+                count = 0
+                with Identity.known_destinations_lock:
+                    for destination_hash, entry in store.load_all():
+                        Identity.known_destinations[destination_hash] = entry
+                        count += 1
+
+                store.close()
+                RNS.log(f"Loaded {count} known destinations from shared instance database", RNS.LOG_VERBOSE)
+
+            except Exception as e:
+                with Identity.known_destinations_lock: Identity.known_destinations = {}
+                RNS.log("Could not load known destinations from shared instance database, continuing with an empty table. The contained exception was: "+str(e), RNS.LOG_ERROR)
+
+            return
+
+        store = None
+        try: store = KnownDestinationsStore(RNS.Reticulum.storagepath+"/known_destinations.db", hash_width=RNS.Reticulum.TRUNCATED_HASHLENGTH//8)
+        except Exception as e:
+            RNS.log("Could not initialise known destinations database, falling back to legacy snapshot persistence. The contained exception was: "+str(e), RNS.LOG_ERROR)
+            Identity.known_destinations_store = None
+
+        if store != None:
+            Identity.known_destinations_store = store
+
+            legacy_path = RNS.Reticulum.storagepath+"/known_destinations"
+            if os.path.isfile(legacy_path):
+                try:
+                    imported = store.import_legacy(legacy_path)
+                    os.rename(legacy_path, legacy_path+".imported")
+                    RNS.log(f"Imported {imported} known destinations from legacy storage into the known destinations database", RNS.LOG_VERBOSE)
+
+                except Exception as e:
+                    RNS.log("Could not import legacy known destinations file into the known destinations database. The contained exception was: "+str(e), RNS.LOG_ERROR)
+                    RNS.trace_exception(e)
+
+            st = time.time()
+            try:
+                count = 0
+                with Identity.known_destinations_lock:
+                    for destination_hash, entry in store.load_all():
+                        Identity.known_destinations[destination_hash] = entry
+                        count += 1
+
+                RNS.log(f"Loaded {count} known destinations from storage in {RNS.prettyshorttime(time.time()-st)}", RNS.LOG_VERBOSE)
+
+            except Exception as e:
+                RNS.log("Error loading known destinations from storage, continuing with an empty table", RNS.LOG_ERROR)
+                RNS.trace_exception(e)
+
+            ratchetdir = RNS.Reticulum.storagepath+"/ratchets"
+            if os.path.isdir(ratchetdir) and len(os.listdir(ratchetdir)) > 0:
+                try:
+                    imported = store.import_legacy_ratchets(ratchetdir, time.time()-Identity.RATCHET_EXPIRY, Identity.known_destinations)
+                    RNS.log(f"Imported {imported} ratchets from legacy file storage", RNS.LOG_VERBOSE)
+
+                except Exception as e:
+                    RNS.log(f"Could not import legacy ratchet files into the known destinations database. The contained exception was: {e}", RNS.LOG_ERROR)
+                    RNS.trace_exception(e)
+
+        else: Identity.load_known_destinations_legacy()
+
+    @staticmethod
+    def load_known_destinations_legacy():
         if os.path.isfile(RNS.Reticulum.storagepath+"/known_destinations"):
             st = time.time()
             try:
@@ -244,6 +319,7 @@ class Identity:
             if destination_hash in Identity.known_destinations:
                 if not Identity.known_destinations[destination_hash][4] < 0:
                     Identity.known_destinations[destination_hash][4] = time.time()
+                    Identity._kd_mark_dirty(destination_hash)
                     return True
 
         return False
@@ -253,6 +329,7 @@ class Identity:
         with Identity.known_destinations_lock:
             if destination_hash in Identity.known_destinations:
                 Identity.known_destinations[destination_hash][4] = -1
+                Identity._kd_mark_dirty(destination_hash)
                 return True
 
         return False
@@ -262,6 +339,7 @@ class Identity:
         with Identity.known_destinations_lock:
             if destination_hash in Identity.known_destinations:
                 Identity.known_destinations[destination_hash][4] = time.time()
+                Identity._kd_mark_dirty(destination_hash)
                 return True
 
         return False
@@ -327,7 +405,7 @@ class Identity:
 
                         if not is_retained and not has_path:
                             if not was_used and now - last_announce > RNS.Transport.UNUSED_DESTINATION_LINGER: stale.append(destination_hash)
-                            elif unused_for > RNS.Transport.DESTINATION_TIMEOUT*1.25:                          stale.append(destination_hash)
+                            elif unused_for > RNS.Transport.PATH_TIMEOUT*1.25:                                 stale.append(destination_hash)
 
             except Exception as e: RNS.log(f"Faulty entry for {RNS.prettyhexrep(destination_hash)} while cleaning known destinations: {e}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
 
@@ -336,13 +414,23 @@ class Identity:
             with Identity.known_destinations_lock:
                 if destination_hash in Identity.known_destinations:
                     Identity.known_destinations.pop(destination_hash)
+                    Identity._kd_mark_deleted(destination_hash)
+                    if destination_hash in Identity.known_ratchets: Identity.known_ratchets.pop(destination_hash)
                     removed += 1
 
-            try:
-                hexhash = RNS.hexrep(destination_hash, delimit=False)
-                ratchet_path = f"{ratchetdir}/{hexhash}"
-                if os.path.isfile(ratchet_path): os.unlink(ratchet_path)
-            except Exception as e: RNS.log(f"Could not clean stale ratchets for {RNS.prettyhexrep(destination_hash)}: {e}", RNS.LOG_WARNING)
+            if not Identity.known_destinations_store:
+                try:
+                    hexhash = RNS.hexrep(destination_hash, delimit=False)
+                    ratchet_path = f"{ratchetdir}/{hexhash}"
+                    if os.path.isfile(ratchet_path): os.unlink(ratchet_path)
+                except Exception as e: RNS.log(f"Could not clean stale ratchets for {RNS.prettyhexrep(destination_hash)}: {e}", RNS.LOG_WARNING)
+
+        if Identity.known_destinations_store != None:
+            expired_ratchets = Identity.known_destinations_store.expire_ratchets(time.time()-Identity.RATCHET_EXPIRY)
+            if len(expired_ratchets) > 0:
+                for destination_hash in expired_ratchets:
+                    with Identity.known_destinations_lock:
+                        if destination_hash in Identity.known_ratchets: Identity.known_ratchets.pop(destination_hash)
 
         RNS.log(f"Cleaned known destinations in {RNS.prettyshorttime(time.time()-st)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
         RNS.log(f"Total: {total}, stale: {len(stale)}, removed: {removed}, no path: {no_path}, never used: {never_used}, with path: {total-no_path}, used: {total-never_used}, retained: {retained}", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
@@ -409,33 +497,40 @@ class Identity:
     @staticmethod
     def _remember_ratchet(destination_hash, ratchet):
         try:
-            if destination_hash in Identity.known_ratchets and Identity.known_ratchets[destination_hash] == ratchet:
-                ratchet_exists = True
+            # Don't re-insert existing ratchet
+            if Identity.known_ratchets.get(destination_hash) == ratchet: return
+
+            store = Identity.known_destinations_store
+            if store != None:
+                # Persist to store, only update in-memory cache if this
+                # destination already exists there.
+                store.remember_ratchet(destination_hash, ratchet, time.time())
+                if destination_hash in Identity.known_ratchets:
+                    Identity.known_ratchets[destination_hash] = ratchet
+
+            # Legacy store: Use file system
+            # Shared instance client: Just keep in memory cache
             else:
-                ratchet_exists = False
+                ratchet_exists = destination_hash in Identity.known_ratchets and Identity.known_ratchets[destination_hash] == ratchet
+                if not ratchet_exists:
+                    RNS.log(f"Remembering ratchet {RNS.prettyhexrep(Identity._get_ratchet_id(ratchet))} for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
+                    Identity.known_ratchets[destination_hash] = ratchet
+                    if not RNS.Transport.owner.is_connected_to_shared_instance:
+                        def persist_job():
+                            with Identity.ratchet_persist_lock:
+                                hexhash = RNS.hexrep(destination_hash, delimit=False)
+                                ratchet_data = {"ratchet": ratchet, "received": time.time()}
 
-            if not ratchet_exists:
-                RNS.log(f"Remembering ratchet {RNS.prettyhexrep(Identity._get_ratchet_id(ratchet))} for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
-                Identity.known_ratchets[destination_hash] = ratchet
-                if not RNS.Transport.owner.is_connected_to_shared_instance:
-                    def persist_job():
-                        with Identity.ratchet_persist_lock:
-                            hexhash = RNS.hexrep(destination_hash, delimit=False)
-                            ratchet_data = {"ratchet": ratchet, "received": time.time()}
+                                ratchetdir = RNS.Reticulum.storagepath+"/ratchets"
 
-                            ratchetdir = RNS.Reticulum.storagepath+"/ratchets"
-                            
-                            if not os.path.isdir(ratchetdir):
-                                os.makedirs(ratchetdir)
+                                if not os.path.isdir(ratchetdir): os.makedirs(ratchetdir)
 
-                            outpath   = f"{ratchetdir}/{hexhash}.out"
-                            finalpath = f"{ratchetdir}/{hexhash}"
-                            with open(outpath, "wb") as ratchet_file:
-                                ratchet_file.write(umsgpack.packb(ratchet_data))
-                            os.replace(outpath, finalpath)
+                                outpath   = f"{ratchetdir}/{hexhash}.out"
+                                finalpath = f"{ratchetdir}/{hexhash}"
+                                with open(outpath, "wb") as ratchet_file: ratchet_file.write(umsgpack.packb(ratchet_data))
+                                os.replace(outpath, finalpath)
 
-                    
-                    threading.Thread(target=persist_job, daemon=True).start()
+                        threading.Thread(target=persist_job, daemon=True).start()
 
         except Exception as e:
             RNS.log(f"Could not persist ratchet for {RNS.prettyhexrep(destination_hash)} to storage.", RNS.LOG_ERROR)
@@ -483,7 +578,43 @@ class Identity:
 
     @staticmethod
     def get_ratchet(destination_hash):
-        if not destination_hash in Identity.known_ratchets:
+        if destination_hash in Identity.known_ratchets: return Identity.known_ratchets[destination_hash]
+
+        store = Identity.known_destinations_store
+        if store != None:
+            ratchet_data = store.fetch_ratchet(destination_hash)
+            if ratchet_data != None:
+                ratchet, received = ratchet_data
+                if time.time() < received+Identity.RATCHET_EXPIRY:
+                    Identity.known_ratchets[destination_hash] = ratchet
+                    return ratchet
+
+                else: return None
+
+            else:
+                RNS.log(f"Could not load ratchet for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+                return None
+
+        elif RNS.Reticulum.get_instance().is_connected_to_shared_instance:
+            try:
+                # TODO: Ideally, refactor this to an RPC method instead
+                store = KnownDestinationsStore(RNS.Reticulum.storagepath+"/known_destinations.db", hash_width=RNS.Reticulum.TRUNCATED_HASHLENGTH//8, read_only=True)
+                ratchet_data = store.fetch_ratchet(destination_hash)
+                store.close()
+
+                if ratchet_data != None:
+                    ratchet, received = ratchet_data
+                    if time.time() < received+Identity.RATCHET_EXPIRY:
+                        Identity.known_ratchets[destination_hash] = ratchet
+                        return ratchet
+
+            except Exception as e: RNS.log(f"Could not fetch ratchet for {RNS.prettyhexrep(destination_hash)} from shared instance database. The contained exception was: {e}", RNS.LOG_ERROR)
+
+            return None
+
+        else:
+            if not os.path.isfile(RNS.Reticulum.storagepath+"/ratchets/"+RNS.hexrep(destination_hash, delimit=False)): return None
+
             ratchetdir = RNS.Reticulum.storagepath+"/ratchets"
             hexhash = RNS.hexrep(destination_hash, delimit=False)
             ratchet_path = f"{ratchetdir}/{hexhash}"
@@ -493,16 +624,14 @@ class Identity:
                         ratchet_data = umsgpack.unpackb(ratchet_file.read())
                         if time.time() < ratchet_data["received"]+Identity.RATCHET_EXPIRY and len(ratchet_data["ratchet"]) == Identity.RATCHETSIZE//8:
                             Identity.known_ratchets[destination_hash] = ratchet_data["ratchet"]
-                        else:
-                            return None
-                
+                        else: return None
+
                 except Exception as e:
                     RNS.log(f"An error occurred while loading ratchet data for {RNS.prettyhexrep(destination_hash)} from storage.", RNS.LOG_ERROR)
                     RNS.log(f"The contained exception was: {e}", RNS.LOG_ERROR)
                     return None
 
-        if destination_hash in Identity.known_ratchets:
-            return Identity.known_ratchets[destination_hash]
+        if destination_hash in Identity.known_ratchets: return Identity.known_ratchets[destination_hash]
         else:
             RNS.log(f"Could not load ratchet for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
             return None
@@ -614,12 +743,35 @@ class Identity:
     @staticmethod
     def persist_data(background=False):
         if not RNS.Transport.owner.is_connected_to_shared_instance:
-            Identity.save_known_destinations(background=background)
+            if Identity.known_destinations_store != None: Identity.flush_known_destinations()
+            else: Identity.save_known_destinations_legacy(background=background)
 
     @staticmethod
-    def exit_handler():
-        Identity.persist_data()
+    def flush_known_destinations():
+        store = Identity.known_destinations_store
+        if store == None: return False
 
+        with Identity.known_destinations_lock: upserts, deletes, ratchet_upserts, ratchet_deletes = store.take_pending()
+
+        try: return store.apply(upserts, deletes, ratchet_upserts, ratchet_deletes, Identity.known_destinations)
+        except Exception as e:
+            RNS.log(f"Could not flush known destinations to storage. The contained exception was: {e}", RNS.LOG_ERROR)
+            return False
+
+    @staticmethod
+    def _kd_mark_dirty(destination_hash):
+        store = Identity.known_destinations_store
+        if store != None: store.mark_dirty(destination_hash)
+
+    @staticmethod
+    def _kd_mark_deleted(destination_hash):
+        store = Identity.known_destinations_store
+        if store != None:
+            store.mark_deleted(destination_hash)
+            store.mark_ratchet_deleted(destination_hash)
+
+    @staticmethod
+    def exit_handler(): Identity.persist_data()
 
     @staticmethod
     def from_bytes(prv_bytes):

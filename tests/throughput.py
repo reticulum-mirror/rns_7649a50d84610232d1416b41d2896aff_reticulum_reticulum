@@ -304,9 +304,7 @@ def build_scenarios(instance, interface, interface_b, requested=None):
                                          salt=b"bench", context=None)
         now = time.time()
         with RNS.Transport.path_table_lock:
-            RNS.Transport.path_table[dst_h] = [
-                now, next_hop, 3, now + 3600, [], interface, bytes(32)
-            ]
+            RNS.Transport.path_table[dst_h] = [now, next_hop, 3, now + 3600, [], interface, bytes(32), now]
         frames = [_transit_single_frame(interface, dst_h,
                                         _payload(i, size, 0x57))
                   for i in range(total)]
@@ -327,9 +325,7 @@ def build_scenarios(instance, interface, interface_b, requested=None):
                                      salt=b"bench", context=None)
     now = time.time()
     with RNS.Transport.path_table_lock:
-        RNS.Transport.path_table[dst_h] = [
-            now, next_hop, 1, now + 3600, [], interface, bytes(32)
-        ]
+        RNS.Transport.path_table[dst_h] = [now, next_hop, 1, now + 3600, [], interface, bytes(32), now]
     frames = [_transit_single_frame(interface, dst_h,
                                     _payload(i, 135, 0x46))
               for i in range(total)]
@@ -450,9 +446,7 @@ def build_scenarios(instance, interface, interface_b, requested=None):
                                      salt=b"bench", context=None)
     now = time.time()
     with RNS.Transport.path_table_lock:
-        RNS.Transport.path_table[dst_h] = [
-            now, next_hop, 3, now + 3600, [], interface, bytes(32)
-        ]
+        RNS.Transport.path_table[dst_h] = [now, next_hop, 3, now + 3600, [], interface, bytes(32), now]
     remote_id = RNS.Identity(create_keys=False)
     remote_id.load_public_key(os.urandom(RNS.Identity.KEYSIZE//8))
     outbound_destination = RNS.Destination(remote_id, RNS.Destination.OUT,

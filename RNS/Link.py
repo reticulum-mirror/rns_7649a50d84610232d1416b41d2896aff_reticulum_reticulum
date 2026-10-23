@@ -1,6 +1,6 @@
 # Reticulum License
 #
-# Copyright (c) 2016-2025 Mark Qvist
+# Copyright (c) 2016-2026 Mark Qvist
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -425,6 +425,7 @@ class Link:
                         self.activated_at = time.time()
                         self.last_proof = self.activated_at
                         RNS.Transport.activate_link(self)
+                        RNS.Transport.mark_path_responsive(self.destination.hash)
                         RNS.log(f"Link {self} established with {self.destination}, RTT is {RNS.prettyshorttime(self.rtt)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
                         
                         if self.rtt != None and self.establishment_cost != None and self.rtt > 0 and self.establishment_cost > 0:

@@ -1350,7 +1350,7 @@ class Reticulum:
                     filepath = self.cachepath + "/" + filename
                     mtime = os.path.getmtime(filepath)
                     age = now - mtime
-                    if age > RNS.Transport.DESTINATION_TIMEOUT: os.unlink(filepath)
+                    if age > RNS.Transport.PATH_TIMEOUT: os.unlink(filepath)
                     if background: time.sleep(0.001)
             
             except Exception as e:
@@ -1387,6 +1387,7 @@ class Reticulum:
                     if path == "lowest_interface_bitrate": self.rpc_return(conn, self.get_lowest_interface_bitrate())
                     if path == "medium_path_timeout":      self.rpc_return(conn, self.get_medium_path_timeout())
                     if path == "link_count":               self.rpc_return(conn, self.get_link_count())
+                    if path == "link_distribution":        self.rpc_return(conn, self.get_link_distribution())
                     if path == "active_link_count":        self.rpc_return(conn, self.get_active_link_count())
                     if path == "packet_rssi":              self.rpc_return(conn, self.get_packet_rssi(call["packet_hash"]))
                     if path == "packet_snr":               self.rpc_return(conn, self.get_packet_snr(call["packet_hash"]))
@@ -1684,6 +1685,7 @@ class Reticulum:
             pql                  = RNS.Transport.INBOUND_PR_QUEUE_LENGTH
             ilql                 = RNS.Transport.INBOUND_IL_QUEUE_LENGTH
             tql                  = dql+aql+pql+ilql
+            ppcs                 = RNS.Transport.path_pool_counts()
 
             stats                = {}
             stats["interfaces"]  = interfaces
@@ -1705,6 +1707,12 @@ class Reticulum:
             stats["ptxf"]        = RNS.Transport.pr_freq_tx
             stats["rxpps"]       = RNS.Transport.rx_pps
             stats["txpps"]       = RNS.Transport.tx_pps
+            stats["rxpkts"]      = RNS.Transport.rx_packets
+            stats["txpkts"]      = RNS.Transport.tx_packets
+            stats["arxpkts"]     = RNS.Transport.announce_rxc
+            stats["atxpkts"]     = RNS.Transport.announce_txc
+            stats["prxpkts"]     = RNS.Transport.pr_rxc
+            stats["ptxpkts"]     = RNS.Transport.pr_txc
             stats["rxqt"]        = qsnapshot[0]
             stats["rxqd"]        = qsnapshot[1][0]
             stats["rxqa"]        = qsnapshot[1][1]
@@ -1721,6 +1729,12 @@ class Reticulum:
             stats["pqpressure"]  = qsnapshot[1][2]/pql  if qsnapshot[1][2] else 0
             stats["ilqpressure"] = qsnapshot[1][3]/ilql if qsnapshot[1][3] else 0
             stats["txq"]         = None
+            stats["tlinks"]      = RNS.Transport.link_count()
+            stats["alinks"]      = RNS.Transport.active_link_count()
+            stats["plinks"]      = stats["tlinks"]-stats["alinks"]
+            stats["tpcount"]     = ppcs[0]
+            stats["unupcount"]   = ppcs[1]
+            stats["actpcount"]   = stats["tpcount"] - stats["unupcount"]
 
             if Reticulum.transport_enabled():
                 stats["transport_id"] = RNS.Transport.identity.hash
@@ -1753,6 +1767,7 @@ class Reticulum:
                     entry = { "hash": dst_hash, "timestamp": RNS.Transport.path_table[dst_hash][0],
                               "via": RNS.Transport.path_table[dst_hash][1], "hops": path_hops,
                               "expires": RNS.Transport.path_table[dst_hash][3],
+                              "used": RNS.Transport.path_table[dst_hash][7],
                               "interface": str(RNS.Transport.path_table[dst_hash][5]) }
                     path_table.append(entry)
 
@@ -1767,15 +1782,10 @@ class Reticulum:
 
         else:
             rate_table = []
-            for dst_hash in RNS.Transport.announce_rate_table:
-                entry = {
-                    "hash": dst_hash,
-                    "last": RNS.Transport.announce_rate_table[dst_hash]["last"],
-                    "rate_violations": RNS.Transport.announce_rate_table[dst_hash]["rate_violations"],
-                    "blocked_until": RNS.Transport.announce_rate_table[dst_hash]["blocked_until"],
-                    "timestamps": RNS.Transport.announce_rate_table[dst_hash]["timestamps"],
-                }
-                rate_table.append(entry)
+            with RNS.Transport.announce_rate_table_lock:
+                for dst_hash, entry in RNS.Transport.announce_rate_table.items():
+                    entry["hash"] = dst_hash
+                    rate_table.append(entry)
 
             return rate_table
 
@@ -1924,6 +1934,16 @@ class Reticulum:
 
         else:
             return RNS.Transport.active_link_count()
+
+    def get_link_distribution(self):
+        if self.is_connected_to_shared_instance:
+            rpc_connection = self.get_rpc_client()
+            rpc_connection.send_bytes(mp.packb({"get": "link_distribution"}))
+            response = mp.unpackb(rpc_connection.recv_bytes())
+            return response
+
+        else:
+            return RNS.Transport.link_distribution()
 
     def get_packet_rssi(self, packet_hash):
         if self.is_connected_to_shared_instance:

@@ -1,6 +1,6 @@
 # Reticulum License
 #
-# Copyright (c) 2016-2025 Mark Qvist
+# Copyright (c) 2016-2026 Mark Qvist
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -42,6 +42,7 @@ from queue import Full, Empty
 from threading import Lock, Condition
 from .vendor import umsgpack as umsgpack
 from RNS.Interfaces.BackboneInterface import BackboneInterface
+from RNS.Storage import AnnounceRateTable, PacketHashlist, AnnounceCache
 
 class InboundQueues:
     __slots__ = ("_cond", "_queues", "_sizes", "_dropped", "_hw_mark")
@@ -123,7 +124,6 @@ class Transport:
     PATHFINDER_R                = 1            # Retransmit retries
     PATHFINDER_G                = 5            # Retry grace period
     PATHFINDER_RW               = 0.5          # Random window for announce rebroadcast
-    PATHFINDER_E                = 60*60*24*7   # Path expiration of one week
     AP_PATH_TIME                = 60*60*24     # Path expiration of one day for Access Point paths
     ROAMING_PATH_TIME           = 60*60*6      # Path expiration of 6 hours for Roaming paths
 
@@ -152,10 +152,14 @@ class Transport:
     LINK_TIMEOUT                = RNS.Link.STALE_TIME * 1.25
     ALLOW_LINK_PATH_REBALANCE   = True
     REVERSE_TIMEOUT             = 8*60         # Reverse table entries are removed after 8 minutes
-    DESTINATION_TIMEOUT         = 60*60*24*7   # Destination table entries are removed if unused for one week
-    UNUSED_DESTINATION_LINGER   = 6*60         # Linger time for pathless and never used destinations
+    PATH_TIMEOUT                = 60*60*24*7   # Path table entry retainment after last cryptographically verifiable liveness event
+    UNUSED_PATH_LINGER          = 60*60*1.75   # Linger time for never used paths
+    UNUSED_PATH_LINGER_LEAF     = 60*5         # Linger time for never used paths on non-transport instances
+    UNUSED_DESTINATION_LINGER   = 60*6         # Linger time for pathless and never used destinations
+    PATH_POOL_UNUSED_TARGET     = 2048         # Max unused path table pool target, unused destinations are culled to reach it
     TUNNEL_TIMEOUT              = 60*60*8      # Tunnel table entries are removed if unused for eight hours
     TUNNEL_PATH_TIMEOUT         = 60*60*8      # Tunnel path table entries are removed if unused for eight hours
+    RATE_TABLE_RETAIN           = 60*60        # Default announce rate table retainment, increased dynamically
     MAX_RECEIPTS                = 1024         # Maximum number of receipts to keep track of
     MAX_RATE_TIMESTAMPS         = 16           # Maximum number of announce timestamps to keep per destination
     PERSIST_RANDOM_BLOBS        = 32           # Maximum number of random blobs per destination to persist to disk
@@ -169,9 +173,8 @@ class Transport:
     active_links                = []           # Links that are active
     pending_links_map           = {}           # Link ID hash map of pending links
     active_links_map            = {}           # Link ID hash map of active links
-    packet_hashlist             = set()        # A list of packet hashes for duplicate detection
-    packet_hashlist_prev        = set()
     receipts                    = []           # Receipts of all outgoing packets for proof processing
+    packet_hashlist             = PacketHashlist(hash_width=RNS.Identity.HASHLENGTH//8)
 
     # Notes on memory usage: 1 megabyte of memory can store approximately
     # 55.100 path table entries or approximately 22.300 link table entries.
@@ -183,11 +186,11 @@ class Transport:
     held_announces              = {}           # A table containing temporarily held announce-table entries
     announce_handlers           = []           # A table storing externally registered announce handlers
     tunnels                     = {}           # A table storing tunnels to other transport instances
-    announce_rate_table         = {}           # A table for keeping track of announce rates
     path_requests               = {}           # A table for storing path request timestamps
     inflight_path_requests      = {}           # A table for tracking in-flight path request
     path_states                 = {}           # A table for keeping track of path states
     blackholed_identities       = {}           # A table for keeping track of blackholed identities
+    announce_rate_table         = AnnounceRateTable(max_timestamps=MAX_RATE_TIMESTAMPS)
     
     discovery_path_requests     = {}           # A table for keeping track of path requests on behalf of other nodes
     discovery_pr_tags           = set()        # A table for keeping track of tagged path requests
@@ -260,20 +263,36 @@ class Transport:
     known_destinations_interval = 5*60
     tables_last_culled          = 0.0
     tables_cull_interval        = 5.0
+    rate_table_last_culled      = 0.0
+    rate_table_cull_interval    = 5.0
+    rate_table_cull_chunk       = 1024
+    pool_size_last_checked      = 0.0
+    pool_size_check_interval    = 5*60
+    kd_flush_interval           = 10.0
+    announce_cache              = None
+    ac_flush_interval           = 15.0
+    ac_last_flush               = 0.0
+    announce_cache_max_pending  = 10000
+    kd_last_flush               = 0.0
     interface_last_jobs         = 0.0
     interface_jobs_interval     = 5.0
     last_mgmt_announce          = 0
     mgmt_announce_interval      = 2*60*60
     blackhole_last_checked      = 0
     blackhole_check_interval    = 60
+    unused_path_linger          = None
     interface_announcer         = None
     discovery_handler           = None
     blackhole_updater           = None
 
     traffic_rxb                 = 0
     traffic_txb                 = 0
+    announce_rxc                = 0
+    announce_txc                = 0
     announce_rxb                = 0
     announce_txb                = 0
+    pr_rxc                      = 0
+    pr_txc                      = 0
     pr_rxb                      = 0
     pr_txb                      = 0
     speed_rx                    = 0
@@ -299,6 +318,7 @@ class Transport:
 
     _identity                   = None
     _should_run                 = True
+    _unused_path_count_estimate = 0
 
     @staticmethod
     def internal_identity(): return Transport._identity
@@ -335,6 +355,12 @@ class Transport:
                 RNS.log(f"Initialized ephemeral transport identity {RNS.prettyhexrep(Transport.identity.hash)}", RNS.LOG_VERBOSE) if RNS.sl(RNS.LOG_VERBOSE) else None
 
             if RNS.Reticulum.local_hops_delta(): Transport.local_hops_delta = (ord(os.urandom(1))%6)+2
+
+        if not RNS.Reticulum.transport_enabled() or Transport.owner.is_connected_to_shared_instance:
+            Transport.unused_path_linger = Transport.UNUSED_PATH_LINGER_LEAF
+        else:
+            Transport.unused_path_linger = Transport.UNUSED_PATH_LINGER
+        RNS.log(f"Unused path linger time is {RNS.prettytime(Transport.unused_path_linger)}", RNS.LOG_DEBUG)
 
         packet_hashlist_path = RNS.Reticulum.storagepath+"/packet_hashlist.raw"
         if RNS.Reticulum.transport_enabled() and not Transport.owner.is_connected_to_shared_instance:
@@ -393,6 +419,9 @@ class Transport:
         # Defer cleaning known destinations
         Transport.destinations_last_cleaned = time.time()
 
+        # Defer path table unused pool cull
+        Transport.pool_size_last_checked = time.time()
+
         # Defer sending management announces for 15 seconds
         Transport.last_mgmt_announce = time.time() - Transport.mgmt_announce_interval + 15
         
@@ -401,6 +430,8 @@ class Transport:
         threading.Thread(target=Transport.count_traffic_loop, daemon=True).start()
 
         # Load transport-related data
+        if not Transport.owner.is_connected_to_shared_instance: Transport.init_announce_cache()
+
         if RNS.Reticulum.transport_enabled():
             path_table_path = RNS.Reticulum.storagepath+"/destination_table"
             tunnel_table_path = RNS.Reticulum.storagepath+"/tunnels"
@@ -412,6 +443,7 @@ class Transport:
                     serialised_destinations = umsgpack.unpackb(file.read())
                     file.close()
 
+                    now = time.time()
                     for serialised_entry in serialised_destinations:
                         destination_hash = serialised_entry[0]
 
@@ -423,6 +455,7 @@ class Transport:
                             random_blobs = serialised_entry[5]
                             receiving_interface = Transport.find_interface_from_hash(serialised_entry[6])
                             announce_packet = Transport.get_cached_packet(serialised_entry[7], packet_type="announce")
+                            used = serialised_entry[8] if len(serialised_entry) > 8 else now
                             blackholed = False
 
                             if len(Transport.blackholed_identities) > 0:
@@ -438,7 +471,10 @@ class Transport:
                                 # increased hop-count.
                                 announce_packet.hops += 1
                                 with Transport.path_table_lock:
-                                    Transport.path_table[destination_hash] = [timestamp, received_from, hops, expires, random_blobs, receiving_interface, announce_packet.packet_hash]
+                                    Transport.path_table[destination_hash] = [timestamp, received_from, hops, expires,
+                                                                              random_blobs, receiving_interface,
+                                                                              announce_packet.packet_hash, used]
+
                                 RNS.log("Loaded path table entry for "+RNS.prettyhexrep(destination_hash)+" from storage", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
                             else:
                                 RNS.log("Could not reconstruct path table entry from storage for "+RNS.prettyhexrep(destination_hash), RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
@@ -466,6 +502,7 @@ class Transport:
                     serialised_tunnels = umsgpack.unpackb(file.read())
                     file.close()
 
+                    now = time.time()
                     for serialised_tunnel in serialised_tunnels:
                         tunnel_id = serialised_tunnel[IDX_TT_TUNNEL_ID]
                         interface_hash = serialised_tunnel[IDX_TT_IF]
@@ -482,6 +519,7 @@ class Transport:
                             random_blobs = list(set(serialised_entry[5]))
                             receiving_interface = Transport.find_interface_from_hash(serialised_entry[6])
                             announce_packet = Transport.get_cached_packet(serialised_entry[7], packet_type="announce")
+                            used = serialised_entry[8] if len(serialised_entry) > 8 else now
 
                             if announce_packet != None:
                                 if not announce_packet.unpack(): continue
@@ -491,7 +529,7 @@ class Transport:
                                 # increased hop-count.
                                 announce_packet.hops += 1
 
-                                tunnel_path = [timestamp, received_from, hops, path_expires, random_blobs, receiving_interface, announce_packet.packet_hash]
+                                tunnel_path = [timestamp, received_from, hops, path_expires, random_blobs, receiving_interface, announce_packet.packet_hash, used]
                                 tunnel_paths[destination_hash] = tunnel_path
 
                         if len(tunnel_paths) > 0:
@@ -543,6 +581,9 @@ class Transport:
         with Transport.interfaces_lock:
             if not interface in Transport.interfaces:
                 Transport.interfaces.append(interface)
+                if interface.announce_rate_target and interface.announce_rate_target > Transport.RATE_TABLE_RETAIN:
+                    Transport.RATE_TABLE_RETAIN = interface.announce_rate_target
+                    RNS.log(f"Increased announce rate table retainment time to {RNS.prettytime(Transport.RATE_TABLE_RETAIN)}", RNS.LOG_DEBUG)
 
     @staticmethod
     def remove_interface(interface):
@@ -828,10 +869,9 @@ class Transport:
                     Transport.announces_last_checked = time.time()
 
 
-                # Cull the packet hashlist if it has reached its max size
+                # Swap the packet hashlist generations if it has reached its max size
                 if len(Transport.packet_hashlist) > Transport.hashlist_maxsize//2:
-                    Transport.packet_hashlist_prev = Transport.packet_hashlist
-                    Transport.packet_hashlist = set()
+                    Transport.packet_hashlist.swap()
 
                 # Cull invalidated path requests
                 if time.time() > Transport.pending_prs_last_checked+Transport.pending_prs_check_interval:
@@ -851,6 +891,24 @@ class Transport:
                     with Transport.discovery_pr_tags_lock:
                         Transport.discovery_pr_tags_prev = Transport.discovery_pr_tags
                         Transport.discovery_pr_tags = set()
+
+                # Incrementally cull stale announce rate table entries
+                if time.time() > Transport.rate_table_last_culled+Transport.rate_table_cull_interval:
+                    with Transport.announce_rate_table_lock:
+                        Transport.announce_rate_table.cull(time.time(), Transport.RATE_TABLE_RETAIN,
+                                                           Transport.rate_table_cull_chunk, Transport.rate_table_cull_chunk)
+
+                    Transport.rate_table_last_culled = time.time()
+
+                # Flush pending known destinations to storage
+                if RNS.Identity.known_destinations_store != None and time.time() > Transport.kd_last_flush+Transport.kd_flush_interval:
+                    Transport.kd_last_flush = time.time()
+                    RNS.Identity.flush_known_destinations()
+
+                # Flush pending cached announces to storage
+                if Transport.announce_cache != None and (time.time() > Transport.ac_last_flush+Transport.ac_flush_interval or Transport.announce_cache.pending_count() > Transport.announce_cache_max_pending):
+                    Transport.ac_last_flush = time.time()
+                    Transport.announce_cache.flush()
 
                 if time.time() > Transport.tables_last_culled + Transport.tables_cull_interval:
                     # Remove unneeded path state entries
@@ -957,25 +1015,42 @@ class Transport:
                     # Cull the path table
                     stale_paths = []
                     with Transport.path_table_lock:
+                        now = time.time()
+                        check_unused = now > Transport.pool_size_last_checked+Transport.pool_size_check_interval
+                        unused_paths = []
+
                         for destination_hash in Transport.path_table:
-                            destination_entry = Transport.path_table[destination_hash]
-                            attached_interface = destination_entry[IDX_PT_RVCD_IF]
+                            path_entry         = Transport.path_table[destination_hash]
+                            attached_interface = path_entry[IDX_PT_RVCD_IF]
+                            path_timestamp     = path_entry[IDX_PT_TIMESTAMP]
+                            path_expiry        = path_entry[IDX_PT_EXPIRES]
+                            path_used          = path_entry[IDX_PT_USED]
 
-                            if attached_interface != None and hasattr(attached_interface, "mode") and attached_interface.mode == RNS.Interfaces.Interface.Interface.MODE_ACCESS_POINT:
-                                destination_expiry = destination_entry[IDX_PT_TIMESTAMP] + Transport.AP_PATH_TIME
-                            elif attached_interface != None and hasattr(attached_interface, "mode") and attached_interface.mode == RNS.Interfaces.Interface.Interface.MODE_ROAMING:
-                                destination_expiry = destination_entry[IDX_PT_TIMESTAMP] + Transport.ROAMING_PATH_TIME
-                            else:
-                                destination_expiry = destination_entry[IDX_PT_TIMESTAMP] + Transport.DESTINATION_TIMEOUT
+                            if check_unused and not path_used: unused_paths.append((path_expiry, destination_hash))
 
-                            if time.time() > destination_expiry:
+                            if now > path_expiry:
                                 stale_paths.append(destination_hash)
                                 should_collect = True
-                                RNS.log("Path to "+RNS.prettyhexrep(destination_hash)+" timed out and was removed", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
+                                RNS.log(f"Path to {RNS.prettyhexrep(destination_hash)} timed out and was removed", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
                             elif not attached_interface in Transport.interfaces:
                                 stale_paths.append(destination_hash)
                                 should_collect = True
-                                RNS.log("Path to "+RNS.prettyhexrep(destination_hash)+" was removed since the attached interface no longer exists", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
+                                RNS.log(f"Path to {RNS.prettyhexrep(destination_hash)} was removed since the attached interface no longer exists", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
+                            elif path_used == 0 and now > path_timestamp + Transport.unused_path_linger:
+                                stale_paths.append(destination_hash)
+                                should_collect = True
+                                RNS.log(f"Removing never used path to {RNS.prettyhexrep(destination_hash)}", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
+
+                        if len(unused_paths) > Transport.PATH_POOL_UNUSED_TARGET:
+                            cull_count = len(unused_paths) - Transport.PATH_POOL_UNUSED_TARGET
+                            RNS.log(f"Culling {cull_count} never used path table entries to reach pool size target {Transport.PATH_POOL_UNUSED_TARGET}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+                            unused_paths.sort()
+                            for cull_entry in unused_paths[-cull_count:]:
+                                stale_paths.append(cull_entry[1])
+
+                        if check_unused:
+                            Transport._unused_path_count_estimate = len(unused_paths)
+                            Transport.pool_size_last_checked = time.time()
 
                     # Cull the pending path requests table
                     stale_path_requests = []
@@ -1387,6 +1462,7 @@ class Transport:
                 return False
 
             outbound_interface = path_entry[IDX_PT_RVCD_IF]
+            path_entry[IDX_PT_USED] = outbound_time
 
             # If there's more than one hop to the destination, and we know
             # a path, we insert the packet into transport by adding the next
@@ -1403,7 +1479,6 @@ class Transport:
                     new_raw += packet.raw[2:]
                     packet_sent(packet)
                     Transport.transmit(outbound_interface, new_raw)
-                    path_entry[IDX_PT_TIMESTAMP] = time.time()
                     sent = True
 
             # In the special case where we are connected to a local shared
@@ -1423,7 +1498,6 @@ class Transport:
                     new_raw += packet.raw[2:]
                     packet_sent(packet)
                     Transport.transmit(outbound_interface, new_raw)
-                    path_entry[IDX_PT_TIMESTAMP] = time.time()
                     sent = True
 
             # If none of the above applies, we know the destination is
@@ -1597,8 +1671,8 @@ class Transport:
                             else: raw = Transport.mangle_hops(packet.raw, Transport.local_hops_delta, transport_insert=packet.header_type==RNS.Packet.HEADER_1)
 
                         Transport.transmit(interface, raw)
-                        if packet.packet_type == RNS.Packet.ANNOUNCE: interface.sent_announce(size=len(raw))
-                        if packet.destination.type == RNS.Destination.PLAIN and packet.is_outbound_pr: interface.sent_path_request(size=len(raw))
+                        if packet.packet_type == RNS.Packet.ANNOUNCE: interface.sent_announce(size=len(raw)); Transport.announce_txc += 1
+                        if packet.destination.type == RNS.Destination.PLAIN and packet.is_outbound_pr: interface.sent_path_request(size=len(raw)); Transport.pr_txc += 1
                         packet_sent(packet)
                         sent = True
 
@@ -1665,7 +1739,7 @@ class Transport:
                 if packet.receiving_interface: packet.receiving_interface.protocol_violation("Announce packet with GROUP type")
                 return False
 
-        if not packet.packet_hash in Transport.packet_hashlist and not packet.packet_hash in Transport.packet_hashlist_prev: return True
+        if not packet.packet_hash in Transport.packet_hashlist: return True
         else:
             if packet.packet_type == RNS.Packet.ANNOUNCE:
                 if packet.destination_type == RNS.Destination.SINGLE:
@@ -1809,8 +1883,9 @@ class Transport:
                 return packet.receiving_interface.protocol_violation(f"Invalid announce signature for {RNS.prettyhexrep(packet.destination_hash)}") if packet.receiving_interface else None
 
             elif packet.receiving_interface != None: packet.receiving_interface.received_announce(size=len(packet.raw))
-            announced_destination_known = packet.destination_hash in Transport.path_table
+            Transport.announce_rxc += 1
 
+            announced_destination_known = packet.destination_hash in Transport.path_table
             if not announced_destination_known:
                 # This is an unknown destination, and we'll apply
                 # potential ingress limiting. Already known
@@ -1856,6 +1931,7 @@ class Transport:
                         return
 
                     if packet.receiving_interface: packet.receiving_interface.received_path_request(size=len(raw))
+                    Transport.pr_rxc += 1
                     if interface.should_ingress_limit_pr():
                         traffic_class = Transport.TC_INGRESS_LIMITED
 
@@ -2110,7 +2186,7 @@ class Transport:
 
                         if Transport.local_hops_delta != 0 and from_local_client and not to_local_client: new_raw = Transport.mangle_hops(new_raw, Transport.local_hops_delta)
                         Transport.transmit(outbound_interface, new_raw)
-                        path_entry[IDX_PT_TIMESTAMP] = time.time()
+                        path_entry[IDX_PT_USED] = time.time()
 
                     else:
                         # TODO: There should probably be some kind of REJECT
@@ -2159,7 +2235,11 @@ class Transport:
                         new_raw += struct.pack("!B", packet.hops if not from_local_client or instance_local_link or Transport.local_hops_delta == 0 else Transport.local_hops_delta)
                         new_raw += packet.raw[2:]
                         Transport.transmit(outbound_interface, new_raw)
-                        Transport.link_table[packet.destination_hash][IDX_LT_TIMESTAMP] = time.time()
+
+                        active_time = time.time()
+                        Transport.link_table[packet.destination_hash][IDX_LT_TIMESTAMP] = active_time
+                        link_path_entry = Transport.path_table.get(Transport.link_table[packet.destination_hash][IDX_LT_DSTHASH])
+                        if link_path_entry: link_path_entry[IDX_PT_USED] = active_time
 
                     else: RNS.log(f"No-outbound return on link packet from {packet.receiving_interface}", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
 
@@ -2213,27 +2293,30 @@ class Transport:
                 if local_and_hops_condition:
                     announce_emitted = Transport.announce_emitted(packet)
                     
+                    path_used    = 0
                     random_blobs = []
                     random_blob  = packet.data[RNS.Identity.KEYSIZE//8+RNS.Identity.NAME_HASH_LENGTH//8:RNS.Identity.KEYSIZE//8+RNS.Identity.NAME_HASH_LENGTH//8+10]
                     if not random_blob: return packet.receiving_interface.protocol_violation("No random blob in data") if packet.receiving_interface else None
 
                     with Transport.inbound_announce_lock:
-                        announced_destination_known = packet.destination_hash in Transport.path_table
+                        existing_path_entry = Transport.path_table.get(packet.destination_hash)
+                        announced_destination_known = existing_path_entry != None
                         if not announced_destination_known:
                             # If this destination is unknown in our table
                             # we should add it
                             should_add = True
 
                         else:
-                            random_blobs     = Transport.path_table[packet.destination_hash][IDX_PT_RANDBLOBS]
-                            current_gravity  = Transport.path_table[packet.destination_hash][IDX_PT_RVCD_IF].gravity
+                            random_blobs     = existing_path_entry[IDX_PT_RANDBLOBS]
+                            current_gravity  = existing_path_entry[IDX_PT_RVCD_IF].gravity
+                            path_used        = existing_path_entry[IDX_PT_USED]
                             announce_gravity = packet.receiving_interface.gravity if packet.receiving_interface != None else None
 
                             # If we already have a path to the announced destination,
                             # but a more recently emitted announce arrives with a hop
                             # count equal to or less than the existing path, we will
                             # update our tables.
-                            if packet.hops <= Transport.path_table[packet.destination_hash][IDX_PT_HOPS]:
+                            if packet.hops <= existing_path_entry[IDX_PT_HOPS]:
                                 path_timebase = Transport.timebase_from_random_blobs(random_blobs)
                                 if not random_blob in random_blobs and announce_emitted > path_timebase:
                                     Transport.mark_path_unknown_state(packet.destination_hash)
@@ -2255,7 +2338,7 @@ class Transport:
                                 # ignore it, unless the path is expired, or
                                 # the emission timestamp is more recent.
                                 now = time.time()
-                                path_expires = Transport.path_table[packet.destination_hash][IDX_PT_EXPIRES]
+                                path_expires = existing_path_entry[IDX_PT_EXPIRES]
                                 
                                 path_announce_emitted = 0
                                 for path_random_blob in random_blobs:
@@ -2302,33 +2385,10 @@ class Transport:
                             rate_blocked = False
                             if packet.context != RNS.Packet.PATH_RESPONSE and packet.receiving_interface.announce_rate_target != None:
                                 with Transport.announce_rate_table_lock:
-                                    if not packet.destination_hash in Transport.announce_rate_table:
-                                        rate_entry = { "last": now, "rate_violations": 0, "blocked_until": 0, "timestamps": [now]}
-                                        Transport.announce_rate_table[packet.destination_hash] = rate_entry
-
-                                    else:
-                                        rate_entry = Transport.announce_rate_table[packet.destination_hash]
-                                        rate_entry["timestamps"].append(now)
-
-                                        while len(rate_entry["timestamps"]) > Transport.MAX_RATE_TIMESTAMPS:
-                                            rate_entry["timestamps"].pop(0)
-
-                                        current_rate = now - rate_entry["last"]
-
-                                        if now > rate_entry["blocked_until"]:
-                                            if current_rate < packet.receiving_interface.announce_rate_target: rate_entry["rate_violations"] += 1
-                                            else: rate_entry["rate_violations"] = max(0, rate_entry["rate_violations"]-1)
-
-                                            if rate_entry["rate_violations"] > packet.receiving_interface.announce_rate_grace:
-                                                rate_target = packet.receiving_interface.announce_rate_target
-                                                rate_penalty = packet.receiving_interface.announce_rate_penalty
-                                                rate_entry["blocked_until"] = rate_entry["last"] + rate_target + rate_penalty
-                                                rate_blocked = True
-                                            else:
-                                                rate_entry["last"] = now
-
-                                        else: rate_blocked = True
-
+                                    rate_blocked = Transport.announce_rate_table.check_and_update(packet.destination_hash, now,
+                                                                                                  packet.receiving_interface.announce_rate_target,
+                                                                                                  packet.receiving_interface.announce_rate_grace,
+                                                                                                  packet.receiving_interface.announce_rate_penalty)
                             retries            = 0
                             announce_hops      = packet.hops
                             local_rebroadcasts = 0
@@ -2336,13 +2396,7 @@ class Transport:
                             attached_interface = None
                             
                             retransmit_timeout = now + (RNS.rand() * Transport.PATHFINDER_RW)
-
-                            if hasattr(packet.receiving_interface, "mode") and packet.receiving_interface.mode == RNS.Interfaces.Interface.Interface.MODE_ACCESS_POINT:
-                                expires = now + Transport.AP_PATH_TIME
-                            elif hasattr(packet.receiving_interface, "mode") and packet.receiving_interface.mode == RNS.Interfaces.Interface.Interface.MODE_ROAMING:
-                                expires = now + Transport.ROAMING_PATH_TIME
-                            else:
-                                expires = now + Transport.PATHFINDER_E
+                            expires            = now + Transport.path_timeout_from_interface(packet.receiving_interface)
                             
                             if not random_blob in random_blobs:
                                 random_blobs.append(random_blob)
@@ -2455,8 +2509,21 @@ class Transport:
                                     new_announce.send()
 
                             if not Transport.owner.is_connected_to_shared_instance: Transport.cache(packet, force_cache=True, packet_type="announce")
-                            path_table_entry = [now, received_from, announce_hops, expires, random_blobs, packet.receiving_interface, packet.packet_hash]
-                            with Transport.path_table_lock: Transport.path_table[packet.destination_hash] = path_table_entry
+                            if rate_blocked:
+                                # Rate-limited announces do not update liveness
+                                # metrics, only the essential routing data.
+                                with Transport.path_table_lock:
+                                    rate_limited_path_entry = Transport.path_table.get(packet.destination_hash)
+                                    if rate_limited_path_entry != None:
+                                        rate_limited_path_entry[IDX_PT_NEXT_HOP]  = received_from
+                                        rate_limited_path_entry[IDX_PT_HOPS]      = announce_hops
+                                        rate_limited_path_entry[IDX_PT_RANDBLOBS] = random_blobs
+                                        rate_limited_path_entry[IDX_PT_RVCD_IF]   = packet.receiving_interface
+                                        rate_limited_path_entry[IDX_PT_PACKET]    = packet.packet_hash
+                            else:
+                                path_table_entry = [now, received_from, announce_hops, expires, random_blobs, packet.receiving_interface, packet.packet_hash, path_used]
+                                with Transport.path_table_lock: Transport.path_table[packet.destination_hash] = path_table_entry
+
                             Transport.mark_path_unknown_state(packet.destination_hash)
                             RNS.log("Destination "+RNS.prettyhexrep(packet.destination_hash)+" is now "+str(announce_hops)+" hops away via "+RNS.prettyhexrep(received_from)+" on "+str(packet.receiving_interface), RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
                             if packet.destination_hash in Transport.path_requests:
@@ -2464,13 +2531,13 @@ class Transport:
 
                             # If the receiving interface is a tunnel, we add the
                             # announce to the tunnels table
-                            if hasattr(packet.receiving_interface, "tunnel_id") and packet.receiving_interface.tunnel_id != None:
+                            if not rate_blocked and hasattr(packet.receiving_interface, "tunnel_id") and packet.receiving_interface.tunnel_id != None:
                                 with Transport.tunnels_lock:
                                     if not packet.receiving_interface.tunnel_id in Transport.tunnels: RNS.log(f"Tunnel ID for {packet.receiving_interface} was not found in tunnel table", RNS.LOG_WARNING)
                                     else:
                                         tunnel_entry = Transport.tunnels[packet.receiving_interface.tunnel_id]
                                         paths = tunnel_entry[IDX_TT_PATHS]
-                                        paths[packet.destination_hash] = [now, received_from, announce_hops, expires, random_blobs, None, packet.packet_hash]
+                                        paths[packet.destination_hash] = [now, received_from, announce_hops, expires, random_blobs, None, packet.packet_hash, path_used]
                                         expires = time.time() + Transport.TUNNEL_TIMEOUT
                                         tunnel_entry[IDX_TT_EXPIRES] = expires
                                         RNS.log("Path to "+RNS.prettyhexrep(packet.destination_hash)+" associated with tunnel "+RNS.prettyhexrep(packet.receiving_interface.tunnel_id), RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
@@ -2590,8 +2657,7 @@ class Transport:
                         # to another path, we remove this packet hash from
                         # the filter hashlist so the link can receive the
                         # packet when it finally arrives over another path.
-                        while packet.packet_hash in Transport.packet_hashlist:      Transport.packet_hashlist.remove(packet.packet_hash)
-                        while packet.packet_hash in Transport.packet_hashlist_prev: Transport.packet_hashlist_prev.remove(packet.packet_hash)
+                        Transport.packet_hashlist.discard(packet.packet_hash)
             else:
                 destination = Transport.destinations_map.get(packet.destination_hash)
                 if destination and destination.type == packet.destination_type:
@@ -2632,6 +2698,7 @@ class Transport:
                                         link_entry[IDX_LT_REM_HOPS] = packet.hops
                                         path_entry = Transport.path_table.get(link_destination)
                                         if path_entry: path_entry[IDX_PT_HOPS] = packet.hops
+                                        Transport.mark_path_responsive(link_destination)
 
                                     elif not link_entry[IDX_LT_VALIDATED]: RNS.log(f"Aborting link request proof path re-balancing for {RNS.prettyhexrep(link_destination)} on link {RNS.prettyhexrep(packet.destination_hash)} due to invalid signature", REBALANCE_LOGLEVEL) if RNS.sl(REBALANCE_LOGLEVEL) else None
                                     else: pass
@@ -2662,6 +2729,7 @@ class Transport:
                                         Transport.transmit(link_entry[IDX_LT_RCVD_IF], new_raw)
                                         if not Transport.owner.is_connected_to_shared_instance:
                                             RNS.Identity._used_destination_data(link_entry[IDX_LT_DSTHASH])
+                                            Transport.mark_path_responsive(link_entry[IDX_LT_DSTHASH])
 
                                     else:
                                         RNS.log("Invalid link request proof in transport for link "+RNS.prettyhexrep(packet.destination_hash)+", dropping proof.", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
@@ -2706,6 +2774,7 @@ class Transport:
                                                 if path_entry:
                                                     path_entry[IDX_PT_HOPS] = packet.hops
                                                     RNS.log(f"Path table re-balanced for {RNS.prettyhexrep(link.destination.hash)}", REBALANCE_LOGLEVEL) if RNS.sl(REBALANCE_LOGLEVEL) else None
+                                                Transport.mark_path_responsive(link.destination.hash)
 
                                         else: RNS.log(f"Aborting path re-balancing at link terminus for {RNS.prettyhexrep(link.destination.hash)} on link {link} due to invalid signature", REBALANCE_LOGLEVEL) if RNS.sl(REBALANCE_LOGLEVEL) else None
                                 except Exception as e: RNS.log("Error while validating link request proof for path re-balancing at link terminus. The contained exception was: "+str(e), REBALANCE_LOGLEVEL) if RNS.sl(REBALANCE_LOGLEVEL) else None
@@ -2837,13 +2906,15 @@ class Transport:
             deprecated_paths = []
             with Transport.tunnels_lock:
                 for destination_hash, path_entry in paths.items():
+                    path_timestamp = path_entry[0]
                     received_from = path_entry[1]
                     announce_hops = path_entry[2]
                     expires = path_entry[3]
                     random_blobs = list(set(path_entry[4]))
                     receiving_interface = interface
                     packet_hash = path_entry[6]
-                    new_entry = [time.time(), received_from, announce_hops, expires, random_blobs, receiving_interface, packet_hash]
+                    used = path_entry[7]
+                    new_entry = [path_timestamp, received_from, announce_hops, expires, random_blobs, receiving_interface, packet_hash, used]
 
                     should_add = False
                     with Transport.path_table_lock:
@@ -2992,6 +3063,21 @@ class Transport:
         return None
 
     @staticmethod
+    def init_announce_cache():
+        try:
+            Transport.announce_cache = AnnounceCache(os.path.join(RNS.Reticulum.cachepath, "announces.db"))
+
+            legacy_dir = os.path.join(RNS.Reticulum.cachepath, "announces")
+            if os.path.isdir(legacy_dir) and len(os.listdir(legacy_dir)) > 0:
+                st = time.time()
+                imported = Transport.announce_cache.import_legacy(legacy_dir)
+                RNS.log(f"Imported {imported} cached announces from legacy file storage in {RNS.prettyshorttime(time.time()-st)}", RNS.LOG_VERBOSE)
+
+        except Exception as e:
+            RNS.log("Could not initialise announce cache database, falling back to file-based caching. The contained exception was: "+str(e), RNS.LOG_ERROR)
+            Transport.announce_cache = None
+
+    @staticmethod
     def should_cache(packet):
         # TODO: Rework the caching system. It's currently
         # not very useful to even cache Resource proofs,
@@ -3024,10 +3110,17 @@ class Transport:
     @staticmethod
     def clean_announce_cache():
         st = time.time()
+        with Transport.path_table_lock: active_path_hashes = set([Transport.path_table[dst_hash][IDX_PT_PACKET] for dst_hash in Transport.path_table])
+        with Transport.tunnels_lock:    tunnel_path_hashes = set([path_dict[dst_hash][IDX_PT_PACKET] for path_dict in [Transport.tunnels[tunnel_id][IDX_TT_PATHS] for tunnel_id in Transport.tunnels] for dst_hash in path_dict])
+        active_path_hashes |= tunnel_path_hashes
+
+        if Transport.announce_cache != None:
+            removed = Transport.announce_cache.clean(active_path_hashes)
+            if removed > 0: RNS.log(f"Removed {removed} cached announces in {RNS.prettytime(time.time()-st)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+            return
+
         target_path = os.path.join(RNS.Reticulum.cachepath, "announces")
         cached_announce_hashes = os.listdir(target_path)
-        with Transport.path_table_lock: active_path_hashes = list(set([Transport.path_table[dst_hash][IDX_PT_PACKET] for dst_hash in Transport.path_table]))
-        with Transport.tunnels_lock:    tunnel_path_hashes = list(set([path_dict[dst_hash][IDX_PT_PACKET] for path_dict in [Transport.tunnels[tunnel_id][IDX_TT_PATHS] for tunnel_id in Transport.tunnels] for dst_hash in path_dict]))
         removed = 0; total = 0
         for packet_hash in cached_announce_hashes:
             remove = False
@@ -3053,22 +3146,40 @@ class Transport:
     def cache(packet, force_cache=False, packet_type=None):
         if force_cache or RNS.Transport.should_cache(packet):
             try:
-                packet_hash = RNS.hexrep(packet.get_hash(), delimit=False)
                 interface_reference = None
                 if packet.receiving_interface != None: interface_reference = str(packet.receiving_interface)
-                if packet_type == "announce": cachepath = os.path.join(RNS.Reticulum.cachepath, "announces", packet_hash)
-                else:                         cachepath = os.path.join(RNS.Reticulum.cachepath, packet_hash)
+
+                if packet_type == "announce":
+                    if Transport.announce_cache != None:
+                        Transport.announce_cache.store(packet.get_hash(), packet.raw, interface_reference)
+                        return
+
+                    cachepath = os.path.join(RNS.Reticulum.cachepath, "announces", RNS.hexrep(packet.get_hash(), delimit=False))
+                else:
+                    cachepath = os.path.join(RNS.Reticulum.cachepath, RNS.hexrep(packet.get_hash(), delimit=False))
 
                 file = open(cachepath, "wb")
                 file.write(umsgpack.packb([packet.raw, interface_reference]))
                 file.close()
 
-            except Exception as e:
-                RNS.log("Error writing packet to cache. The contained exception was: "+str(e), RNS.LOG_ERROR)
+            except Exception as e: RNS.log("Error writing packet to cache. The contained exception was: "+str(e), RNS.LOG_ERROR)
 
     @staticmethod
     def get_cached_packet(packet_hash, packet_type=None):
         try:
+            if packet_type == "announce" and Transport.announce_cache != None:
+                cached = Transport.announce_cache.fetch(packet_hash)
+                if cached == None: return None
+
+                packet = RNS.Packet(None, cached[0])
+                interface_reference = cached[1]
+
+                for interface in Transport.interfaces:
+                    if str(interface) == interface_reference:
+                        packet.receiving_interface = interface
+
+                return packet
+
             packet_hash = RNS.hexrep(packet_hash, delimit=False)
             if packet_type == "announce": path = os.path.join(RNS.Reticulum.cachepath, "announces", packet_hash)
             else:                         path = os.path.join(RNS.Reticulum.cachepath, packet_hash)
@@ -3208,6 +3319,22 @@ class Transport:
         return 2*(RNS.Reticulum.MTU*8/max(Transport.lowest_interface_bitrate, RNS.Reticulum.MINIMUM_BITRATE)) + RNS.Reticulum.DEFAULT_PER_HOP_TIMEOUT
 
     @staticmethod
+    def path_count():
+        return len(Transport.path_table)
+
+    @staticmethod
+    def unused_path_count():
+        with Transport.path_table_lock:
+            return sum(1 for e in Transport.path_table.values() if not e[IDX_PT_USED])
+
+    @staticmethod
+    def path_pool_counts():
+        with Transport.path_table_lock:
+            total = len(Transport.path_table)
+            unused = sum(1 for e in Transport.path_table.values() if not e[IDX_PT_USED])
+        return total, unused
+
+    @staticmethod
     def link_count():
         return len(Transport.link_table)
 
@@ -3216,14 +3343,44 @@ class Transport:
         return sum(1 for e in (True for entry in Transport.link_table if entry[IDX_LT_VALIDATED]))
 
     @staticmethod
+    def link_distribution():
+        link_destinations = {}
+
+        # TODO: Finish implementation
+        return link_destinations
+
+        # try:
+        #     for link_id in Transport.link_table:
+        #         link_entry = Transport.link_table.get(link_id)
+        #         if link_entry:
+        #             link_destination = link_entry[IDX_LT_DSTHASH]
+        #             active           = link_entry[IDX_LT_VALIDATED]
+
+        #             if not link_destination in link_destinations:
+        #                 link_destinations[link_destination] = {}
+
+        #             else:
+        #                 pass
+
+        # except Exception as e: RNS.log(f"Error while getting link distribution stats: {e}", RNS.LOG_DEBUG)
+
+    @staticmethod
     def expire_path(destination_hash):
         with Transport.path_table_lock:
             if destination_hash in Transport.path_table:
                 Transport.path_table[destination_hash][IDX_PT_TIMESTAMP] = 0
+                Transport.path_table[destination_hash][IDX_PT_EXPIRES] = 0
                 Transport.tables_last_culled = 0
                 return True
             
             else: return False
+
+    @staticmethod
+    def path_timeout_from_interface(interface):
+        if interface != None and hasattr(interface, "mode"):
+            if interface.mode == RNS.Interfaces.Interface.Interface.MODE_ACCESS_POINT: return Transport.AP_PATH_TIME
+            elif interface.mode == RNS.Interfaces.Interface.Interface.MODE_ROAMING:    return Transport.ROAMING_PATH_TIME
+        return Transport.PATH_TIMEOUT
 
     @staticmethod
     def mark_path_unresponsive(destination_hash):
@@ -3235,11 +3392,22 @@ class Transport:
 
     @staticmethod
     def mark_path_responsive(destination_hash):
-        if destination_hash in Transport.path_table:
-            with Transport.path_states_lock: Transport.path_states[destination_hash] = Transport.STATE_RESPONSIVE
-            return True
-        
-        else: return False
+        # Marking a path live must only occur on events that
+        # cryptographically prove recent destination liveness.
+        now = time.time()
+        with Transport.path_table_lock:
+            path_entry = Transport.path_table.get(destination_hash)
+            if path_entry != None:
+                path_entry[IDX_PT_TIMESTAMP] = now
+                path_entry[IDX_PT_EXPIRES]   = now + Transport.path_timeout_from_interface(path_entry[IDX_PT_RVCD_IF])
+                path_entry[IDX_PT_USED]      = now
+
+                with Transport.path_states_lock:
+                    Transport.path_states[destination_hash] = Transport.STATE_RESPONSIVE
+
+                return True
+
+            else: return False
 
     @staticmethod
     def mark_path_unknown_state(destination_hash):
@@ -3767,14 +3935,14 @@ class Transport:
 
                 packet_hashlist_path = RNS.Reticulum.storagepath+"/packet_hashlist.raw"
                 with open(packet_hashlist_path, "wb") as file:
-                    for packet_hash in Transport.packet_hashlist.copy():
+                    for bucket in Transport.packet_hashlist.buckets():
                         if background:
                             if time.time() - round_started_at > yield_threshold:
                                 # Low priority, yield thread
                                 round_started_at = time.time()
                                 time.sleep(0.001)
 
-                        file.write(packet_hash)
+                        file.write(bucket)
 
                 RNS.log(f"Saved packet hashlist in {RNS.prettyshorttime(time.time()-save_start)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
 
@@ -3839,6 +4007,7 @@ class Transport:
                             expires        = de[IDX_PT_EXPIRES]
                             random_blobs   = de[IDX_PT_RANDBLOBS]
                             packet_hash    = de[IDX_PT_PACKET]
+                            used           = de[IDX_PT_USED]
                             interface_hash = interface.get_hash()
 
                             serialised_entry = [ destination_hash,
@@ -3848,7 +4017,8 @@ class Transport:
                                                  expires,
                                                  random_blobs,
                                                  interface_hash,
-                                                 packet_hash ]
+                                                 packet_hash,
+                                                 used ]
 
                             serialised_destinations.append(serialised_entry)
 
@@ -3922,6 +4092,7 @@ class Transport:
                         path_expires = de[3]
                         random_blobs = de[4][-Transport.PERSIST_RANDOM_BLOBS:]
                         packet_hash = de[6]
+                        used = de[7]
 
                         serialised_entry = [
                             destination_hash,
@@ -3931,7 +4102,8 @@ class Transport:
                             path_expires,
                             random_blobs,
                             interface_hash,
-                            packet_hash
+                            packet_hash,
+                            used,
                         ]
 
                         serialised_paths.append(serialised_entry)
@@ -3979,6 +4151,7 @@ class Transport:
         Transport.void_queues()
         if not Transport.owner.is_connected_to_shared_instance:
             Transport.persist_data()
+            if Transport.announce_cache != None: Transport.announce_cache.flush()
 
     @staticmethod
     def blackhole_identity(identity_hash, until=None, reason=None):
@@ -4126,6 +4299,7 @@ IDX_PT_EXPIRES   = 3
 IDX_PT_RANDBLOBS = 4
 IDX_PT_RVCD_IF   = 5
 IDX_PT_PACKET    = 6
+IDX_PT_USED      = 7
 
 # Transport.reverse_table entry indices
 IDX_RT_RCVD_IF   = 0
