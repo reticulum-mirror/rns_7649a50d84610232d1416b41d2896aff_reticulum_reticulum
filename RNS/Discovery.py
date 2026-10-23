@@ -45,6 +45,7 @@ from collections import deque
 # version tag in announced discovery information.
 IMPLEMENTATION_NAME = "RNS"
 from RNS._version import __version__ as RNS_VERSION
+import RNS.Stamps
 
 NAME            = 0xFF
 TRANSPORT_ID    = 0xFE
@@ -78,17 +79,10 @@ class InterfaceAnnouncer():
                                     "RNodeInterface", "WeaveInterface", "I2PInterface", "KISSInterface"]
 
     def __init__(self, owner):
-        import importlib.util
-        if importlib.util.find_spec('LXMF') != None: from LXMF import LXStamper
-        else:
-            RNS.log("Using on-network interface discovery requires the LXMF module to be installed.", RNS.LOG_CRITICAL)
-            RNS.log("You can install it with the command: pip install lxmf", RNS.LOG_CRITICAL)
-            RNS.panic()
-
         self.owner        = owner
         self.should_run   = False
         self.job_interval = self.JOB_INTERVAL
-        self.stamper      = LXStamper
+        self.stamper      = RNS.Stamps
         self.stamp_cache  = {}
 
         if self.owner.has_network_identity(): identity = self.owner.network_identity
@@ -262,17 +256,10 @@ class InterfaceAnnounceHandler:
     FLAG_ENCRYPTED    = 0b00000010
 
     def __init__(self, required_value=InterfaceAnnouncer.DEFAULT_STAMP_VALUE, callback=None):
-        import importlib.util
-        if importlib.util.find_spec('LXMF') != None: from LXMF import LXStamper
-        else:
-            RNS.log("Using on-network interface discovery requires the LXMF module to be installed.", RNS.LOG_CRITICAL)
-            RNS.log("You can install it with the command: pip install lxmf", RNS.LOG_CRITICAL)
-            RNS.panic()
-
         self.aspect_filter   = APP_NAME+".discovery.interface"
         self.required_value  = required_value
         self.callback        = callback
-        self.stamper         = LXStamper
+        self.stamper         = RNS.Stamps
         self.valid_cache     = {}
         self.valid_cache_max = 2048
         self.invalid_cache   = deque(maxlen=2048)
