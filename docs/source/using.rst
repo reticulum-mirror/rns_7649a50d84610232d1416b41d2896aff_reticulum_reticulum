@@ -644,7 +644,7 @@ Or fetch a file from the remote system:
 
   $ rncp --fetch ~/path/to/file.tgz 73cbd378bb0286ed11a707c13447bb1e
 
-The default identity file is stored in ``~/.reticulum/identities/rncp``, but you can use
+The default identity file is stored in ``~/.reticulum/storage/identities/rncp``, but you can use
 another one, which will be created if it does not already exist
 
 .. code:: text
@@ -731,7 +731,7 @@ Or enter the interactive mode pseudo-shell:
 
   $ rnx 7a55144adf826958a9529a3bcf08b149 -x
 
-The default identity file is stored in ``~/.reticulum/identities/rnx``, but you can use
+The default identity file is stored in ``~/.reticulum/storage/identities/rnx``, but you can use
 another one, which will be created if it does not already exist 
 
 .. code:: text
@@ -950,9 +950,10 @@ When connecting to a remote listener, several options are available:
 
 **Identity & Destination**
 
-The default identity file for ``rnsh`` is stored at
-``~/.reticulum/identities/rnsh``, but you can specify a different one with the
-``-i`` option, which will be created if it does not already exist:
+The default initiator identity file for ``rnsh`` is stored at
+``~/.rns/identity`` (default listener identity is in ``~/.rns/identity.default``),
+but you can specify a different one with the ``-i`` option, which will be created if
+it does not already exist:
 
 .. code:: text
 
