@@ -33,6 +33,8 @@ import gc
 import RNS
 import time
 import math
+import ctypes
+import ctypes.util
 import struct
 import inspect
 import threading
@@ -277,9 +279,15 @@ class Transport:
     interface_last_jobs         = 0.0
     interface_jobs_interval     = 5.0
     last_mgmt_announce          = 0
+    mem_trim_throttle           = 300
+    last_mem_trim               = 0
+    collect_throttle            = 1.0
+    last_collect                = 0
     mgmt_announce_interval      = 2*60*60
     blackhole_last_checked      = 0
     blackhole_check_interval    = 60
+    should_collect              = False
+    mem_dirty                   = False
     unused_path_linger          = None
     interface_announcer         = None
     discovery_handler           = None
@@ -422,6 +430,10 @@ class Transport:
         # Defer path table unused pool cull
         Transport.pool_size_last_checked = time.time()
 
+        # Defer memory trim
+        Transport.last_collect  = time.time()
+        Transport.last_mem_trim = time.time()
+
         # Defer sending management announces for 15 seconds
         Transport.last_mgmt_announce = time.time() - Transport.mgmt_announce_interval + 15
         
@@ -489,11 +501,11 @@ class Transport:
                     else:                              specifier = "entries"
 
                     RNS.log("Loaded "+str(len(Transport.path_table))+" path table "+specifier+" from storage", RNS.LOG_VERBOSE) if RNS.sl(RNS.LOG_VERBOSE) else None
-                    gc.collect()
+                    garbage_collect()
 
                 except Exception as e:
                     RNS.log("Could not load destination table from storage, the contained exception was: "+str(e), RNS.LOG_ERROR)
-                    gc.collect()
+                    garbage_collect()
 
             if os.path.isfile(tunnel_table_path) and not Transport.owner.is_connected_to_shared_instance:
                 serialised_tunnels = []
@@ -540,11 +552,11 @@ class Transport:
                     else:                           specifier = "entries"
 
                     RNS.log("Loaded "+str(len(Transport.tunnels))+" tunnel table "+specifier+" from storage", RNS.LOG_VERBOSE) if RNS.sl(RNS.LOG_VERBOSE) else None
-                    gc.collect()
+                    garbage_collect()
 
                 except Exception as e:
                     RNS.log("Could not load tunnel table from storage, the contained exception was: "+str(e), RNS.LOG_ERROR)
-                    gc.collect()
+                    garbage_collect()
 
             if RNS.Reticulum.probe_destination_enabled():
                 Transport.probe_destination = RNS.Destination(Transport.identity, RNS.Destination.IN, RNS.Destination.SINGLE, Transport.APP_NAME, "probe")
@@ -574,7 +586,7 @@ class Transport:
             if hasattr(interface, "wants_tunnel") and interface.wants_tunnel:
                 Transport.synthesize_tunnel(interface)
 
-        gc.collect()
+        garbage_collect()
 
     @staticmethod
     def add_interface(interface):
@@ -730,8 +742,6 @@ class Transport:
 
         try:
             with Transport.jobs_lock:
-                should_collect = False
-
                 # Process active and pending link lists
                 if time.time() > Transport.links_last_checked+Transport.links_check_interval:
 
@@ -787,7 +797,7 @@ class Transport:
                             culled_receipt = Transport.receipts.pop(0)
                             culled_receipt.timeout = -1
                             culled_receipt.check_timeout()
-                            should_collect = True
+                            Transport.should_collect = True
 
                     # TODO: Actually, this whole thing might need re-
                     # thinking a bit, but may require moving receipts
@@ -1030,15 +1040,15 @@ class Transport:
 
                             if now > path_expiry:
                                 stale_paths.append(destination_hash)
-                                should_collect = True
+                                Transport.should_collect = True
                                 RNS.log(f"Path to {RNS.prettyhexrep(destination_hash)} timed out and was removed", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
                             elif not attached_interface in Transport.interfaces:
                                 stale_paths.append(destination_hash)
-                                should_collect = True
+                                Transport.should_collect = True
                                 RNS.log(f"Path to {RNS.prettyhexrep(destination_hash)} was removed since the attached interface no longer exists", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
                             elif path_used == 0 and now > path_timestamp + Transport.unused_path_linger:
                                 stale_paths.append(destination_hash)
-                                should_collect = True
+                                Transport.should_collect = True
                                 RNS.log(f"Removing never used path to {RNS.prettyhexrep(destination_hash)}", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
 
                         if len(unused_paths) > Transport.PATH_POOL_UNUSED_TARGET:
@@ -1084,7 +1094,7 @@ class Transport:
 
                             if time.time() > entry["timeout"]:
                                 stale_discovery_path_requests.append(destination_hash)
-                                should_collect = True
+                                Transport.should_collect = True
                                 RNS.log("Waiting path request for "+RNS.prettyhexrep(destination_hash)+" timed out and was removed", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
 
                     # Cull the tunnel table
@@ -1095,11 +1105,11 @@ class Transport:
 
                             expires = tunnel_entry[IDX_TT_EXPIRES]
                             if expires > time.time() + Transport.TUNNEL_TIMEOUT*2:
-                                stale_tunnels.append(tunnel_id); should_collect = True
+                                stale_tunnels.append(tunnel_id); Transport.should_collect = True
                                 RNS.log("Tunnel "+RNS.prettyhexrep(tunnel_id)+" with excessive expiry was removed", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
 
                             elif time.time() > expires:
-                                stale_tunnels.append(tunnel_id); should_collect = True
+                                stale_tunnels.append(tunnel_id); Transport.should_collect = True
                                 RNS.log("Tunnel "+RNS.prettyhexrep(tunnel_id)+" timed out and was removed", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
                             
                             else:
@@ -1113,7 +1123,7 @@ class Transport:
                                     tunnel_path_entry = tunnel_paths[tunnel_path]
 
                                     if time.time() > tunnel_path_entry[0] + Transport.TUNNEL_PATH_TIMEOUT:
-                                        stale_tunnel_paths.append(tunnel_path); should_collect = True
+                                        stale_tunnel_paths.append(tunnel_path); Transport.should_collect = True
                                         RNS.log("Tunnel path to "+RNS.prettyhexrep(tunnel_path)+" timed out and was removed", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
 
                                     else:
@@ -1128,7 +1138,7 @@ class Transport:
                                             tunnel_announce_timebase = Transport.timebase_from_random_blobs(random_blobs)
                                             
                                             if current_path_timebase > tunnel_announce_timebase:
-                                                stale_tunnel_paths.append(tunnel_path); should_collect = True
+                                                stale_tunnel_paths.append(tunnel_path); Transport.should_collect = True
                                                 RNS.log("Tunnel path to "+RNS.prettyhexrep(tunnel_path)+" was removed due to more recent active path", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
 
                                 for tunnel_path in stale_tunnel_paths:
@@ -1287,7 +1297,12 @@ class Transport:
                     except Exception as e:
                         RNS.log(f"Error while checking blackholed identities: {e}", RNS.LOG_ERROR)
 
-                if should_collect: gc.collect()
+            if Transport.should_collect and time.time() > Transport.last_collect+Transport.collect_throttle:
+                garbage_collect()
+
+            if Transport.mem_dirty and time.time() > Transport.last_mem_trim+Transport.mem_trim_throttle:
+                Transport.mem_dirty = False; trim_heap()
+                Transport.last_mem_trim = time.time()
 
         except Exception as e:
             RNS.log("An exception occurred while running Transport jobs.", RNS.LOG_ERROR)
@@ -3048,7 +3063,7 @@ class Transport:
         with Transport.announce_handler_lock:
             while handler in Transport.announce_handlers: Transport.announce_handlers.remove(handler)
 
-        gc.collect()
+        garbage_collect()
 
     @staticmethod
     def interface_hashes():
@@ -3887,7 +3902,7 @@ class Transport:
                     interface.announce_queue = []
                     RNS.log("Dropped "+na_str+" on "+str(interface), RNS.LOG_VERBOSE) if RNS.sl(RNS.LOG_VERBOSE) else None
 
-        gc.collect()
+        garbage_collect()
 
     @staticmethod
     def timebase_from_random_blob(random_blob):
@@ -3949,7 +3964,7 @@ class Transport:
             except Exception as e: RNS.log("Could not save packet hashlist to storage, the contained exception was: "+str(e), RNS.LOG_ERROR)
             finally: Transport.saving_packet_hashlist = False
 
-            gc.collect()
+            garbage_collect()
 
 
     @staticmethod
@@ -4042,7 +4057,7 @@ class Transport:
                 RNS.trace_exception(e)
 
             Transport.saving_path_table = False
-            gc.collect()
+            garbage_collect()
 
 
     @staticmethod
@@ -4128,7 +4143,7 @@ class Transport:
                 RNS.log("Could not save tunnel table to storage, the contained exception was: "+str(e), RNS.LOG_ERROR)
 
             Transport.saving_tunnel_table = False
-            gc.collect()
+            garbage_collect()
 
     @staticmethod
     def persist_data(background=False):
@@ -4137,7 +4152,7 @@ class Transport:
             Transport.save_packet_hashlist(background=background)
             Transport.save_path_table(background=background)
             Transport.save_tunnel_table(background=background)
-            gc.collect()
+            garbage_collect()
 
     @staticmethod
     def void_queues():
@@ -4288,6 +4303,47 @@ class Transport:
             RNS.log(f"Error while persisting blackhole list: {e}", RNS.LOG_ERROR)
             RNS.trace_exception(e)
 
+# Memory management
+
+def garbage_collect():
+    Transport.should_collect = False
+    gc.collect(); Transport.mem_dirty = True
+    Transport.last_collect = time.time()
+
+_trim_impl = None
+_trim_resolved = False
+def trim_heap():
+    global _trim_impl, _trim_resolved
+    if not _trim_resolved:
+        _trim_resolved = True
+        _trim_impl = _resolve_trim()
+    if _trim_impl is not None:
+        try: _trim_impl()
+        except Exception as e: RNS.log(f"Memory trim error: {e}", RNS.LOG_DEBUG) # TODO: Reset to no-op
+
+def _resolve_trim():
+    try:
+        if RNS.vendor.platformutils.is_linux():
+            f = getattr(ctypes.CDLL(None), "malloc_trim", None) # None on musl
+            if f is None: return None
+            return lambda: f(0)
+        elif RNS.vendor.platformutils.is_darwin():
+            libc = ctypes.CDLL(ctypes.util.find_library("c"))
+            f = getattr(libc, "malloc_zone_pressure_relief", None)
+            if f is None: return None
+            def trim(): f(None, 0); f(None, 0) # Yes, it's strange, see Apple's malloc.h
+            return trim
+        elif RNS.vendor.platformutils.is_android():
+            libc = ctypes.CDLL("libc.so")
+            return lambda: libc.mallopt(-101, 0) # M_PURGE, API 28+
+        elif RNS.vendor.platformutils.is_windows():
+            k32 = ctypes.WinDLL("kernel32")
+            heap = k32.GetProcessHeap()
+            f = k32.HeapTrim # Will raise AttributeError on Windows < 8
+            return lambda: f(heap, 0)
+    except Exception as e: RNS.log(f"Heap trim unavailable: {e}", RNS.LOG_DEBUG)
+    RNS.log(f"Could not resolve memory trim function on this platform, memory management will be sub-optimal", RNS.LOG_WARNING)
+    return None
 
 # Table entry indices
 
