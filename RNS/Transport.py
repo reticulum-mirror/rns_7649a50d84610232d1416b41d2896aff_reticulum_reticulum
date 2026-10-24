@@ -281,8 +281,11 @@ class Transport:
     last_mgmt_announce          = 0
     mem_trim_throttle           = 300
     last_mem_trim               = 0
-    collect_throttle            = 1.0
+    collect_throttle            = 1440
     last_collect                = 0
+    mem_trim_pad                = 0
+    mem_trim_gate_mb            = 8
+    last_trim_rss_kb            = -1
     mgmt_announce_interval      = 2*60*60
     blackhole_last_checked      = 0
     blackhole_check_interval    = 60
@@ -1297,10 +1300,13 @@ class Transport:
                     except Exception as e:
                         RNS.log(f"Error while checking blackholed identities: {e}", RNS.LOG_ERROR)
 
-            if Transport.should_collect and time.time() > Transport.last_collect+Transport.collect_throttle:
-                garbage_collect()
+            if Transport.should_collect:
+                Transport.mem_dirty = True
+                if time.time() > Transport.last_collect+Transport.collect_throttle:
+                    garbage_collect()
 
-            if Transport.mem_dirty and time.time() > Transport.last_mem_trim+Transport.mem_trim_throttle:
+            trim_surplus = _trim_due(time.time())
+            if trim_surplus is not None:
                 Transport.mem_dirty = False; trim_heap()
                 Transport.last_mem_trim = time.time()
 
@@ -3063,7 +3069,7 @@ class Transport:
         with Transport.announce_handler_lock:
             while handler in Transport.announce_handlers: Transport.announce_handlers.remove(handler)
 
-        garbage_collect()
+        Transport.should_collect = True
 
     @staticmethod
     def interface_hashes():
@@ -3902,7 +3908,7 @@ class Transport:
                     interface.announce_queue = []
                     RNS.log("Dropped "+na_str+" on "+str(interface), RNS.LOG_VERBOSE) if RNS.sl(RNS.LOG_VERBOSE) else None
 
-        garbage_collect()
+        Transport.should_collect = True
 
     @staticmethod
     def timebase_from_random_blob(random_blob):
@@ -3963,9 +3969,6 @@ class Transport:
 
             except Exception as e: RNS.log("Could not save packet hashlist to storage, the contained exception was: "+str(e), RNS.LOG_ERROR)
             finally: Transport.saving_packet_hashlist = False
-
-            garbage_collect()
-
 
     @staticmethod
     def save_path_table(background=False):
@@ -4057,8 +4060,6 @@ class Transport:
                 RNS.trace_exception(e)
 
             Transport.saving_path_table = False
-            garbage_collect()
-
 
     @staticmethod
     def save_tunnel_table(background=False):
@@ -4143,7 +4144,6 @@ class Transport:
                 RNS.log("Could not save tunnel table to storage, the contained exception was: "+str(e), RNS.LOG_ERROR)
 
             Transport.saving_tunnel_table = False
-            garbage_collect()
 
     @staticmethod
     def persist_data(background=False):
@@ -4152,7 +4152,6 @@ class Transport:
             Transport.save_packet_hashlist(background=background)
             Transport.save_path_table(background=background)
             Transport.save_tunnel_table(background=background)
-            garbage_collect()
 
     @staticmethod
     def void_queues():
@@ -4305,44 +4304,87 @@ class Transport:
 
 # Memory management
 
+MEM_TRIM_FLOOR = 60
+_trim_impl     = None
+_trim_resolved = False
+
 def garbage_collect():
     Transport.should_collect = False
     gc.collect(); Transport.mem_dirty = True
     Transport.last_collect = time.time()
 
-_trim_impl = None
-_trim_resolved = False
 def trim_heap():
     global _trim_impl, _trim_resolved
     if not _trim_resolved:
         _trim_resolved = True
-        _trim_impl = _resolve_trim()
+        _trim_impl     = _resolve_trim()
+
     if _trim_impl is not None:
-        try: _trim_impl()
-        except Exception as e: RNS.log(f"Memory trim error: {e}", RNS.LOG_DEBUG) # TODO: Reset to no-op
+        try:
+            _trim_impl(Transport.mem_trim_pad)
+            Transport.last_trim_rss_kb = _proc_status_kb("VmRSS")["VmRSS"]
+            if Transport.last_trim_rss_kb >= 0:
+                RNS.log(f"Heap trimmed, RSS {RNS.prettysize(Transport.last_trim_rss_kb*1024)}", RNS.LOG_DEBUG)
+        except Exception as e: RNS.log(f"Memory trim error: {e}", RNS.LOG_DEBUG)
+
+def _proc_status_kb(*fields):
+    # Map missing fields to -1
+    values = {field: -1 for field in fields}
+    try:
+        with open("/proc/self/status") as status_file:
+            for line in status_file:
+                for field in fields:
+                    if line.startswith(field):
+                        values[field] = int(line.split()[1])
+    except (OSError, ValueError): pass
+    return values
+
+def _trim_due(now):
+    if not Transport.mem_dirty: return None
+    elapsed = now - Transport.last_mem_trim
+
+    # If no gate configured, rely solely on throttle
+    if Transport.mem_trim_gate_mb <= 0:
+        if now > Transport.last_mem_trim+Transport.mem_trim_throttle: return -1
+        return None
+
+    # Hard limit trim cadence
+    if elapsed < MEM_TRIM_FLOOR: return None
+
+    # First gated trim, no baseline yet
+    if Transport.last_trim_rss_kb < 0: return -1
+
+    rss = _proc_status_kb("VmRSS")["VmRSS"]
+    if rss < 0: # No RSS introspection available, fall back to the timer
+        if now > Transport.last_mem_trim+Transport.mem_trim_throttle: return -1
+        return None
+
+    surplus = rss - Transport.last_trim_rss_kb
+    if surplus >= Transport.mem_trim_gate_mb*1024: return surplus
+    return None
 
 def _resolve_trim():
     try:
         if RNS.vendor.platformutils.is_linux():
-            f = getattr(ctypes.CDLL(None), "malloc_trim", None) # None on musl
+            f = getattr(ctypes.CDLL(None), "malloc_trim", None) # Not available on musl
             if f is None: return None
-            return lambda: f(0)
+            return lambda pad: f(pad)
         elif RNS.vendor.platformutils.is_darwin():
             libc = ctypes.CDLL(ctypes.util.find_library("c"))
             f = getattr(libc, "malloc_zone_pressure_relief", None)
             if f is None: return None
-            def trim(): f(None, 0); f(None, 0) # Yes, it's strange, see Apple's malloc.h
+            def trim(pad): f(None, 0); f(None, 0) # Yes, it's strange, see Apple's malloc.h
             return trim
         elif RNS.vendor.platformutils.is_android():
             libc = ctypes.CDLL("libc.so")
-            return lambda: libc.mallopt(-101, 0) # M_PURGE, API 28+
+            return lambda pad: libc.mallopt(-101, 0) # M_PURGE, API 28+
         elif RNS.vendor.platformutils.is_windows():
             k32 = ctypes.WinDLL("kernel32")
             heap = k32.GetProcessHeap()
             f = k32.HeapTrim # Will raise AttributeError on Windows < 8
-            return lambda: f(heap, 0)
+            return lambda pad: f(heap, 0)
     except Exception as e: RNS.log(f"Heap trim unavailable: {e}", RNS.LOG_DEBUG)
-    RNS.log(f"Could not resolve memory trim function on this platform, memory management will be sub-optimal", RNS.LOG_WARNING)
+    RNS.log(f"No working memory trim mechanism on this platform, memory management will be sub-optimal", RNS.LOG_WARNING)
     return None
 
 # Table entry indices

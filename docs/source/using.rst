@@ -1470,6 +1470,7 @@ following content:
   Restart=always
   RestartSec=3
   User=USERNAMEHERE
+  Environment=MALLOC_ARENA_MAX=2
   ExecStart=rnsd --service
 
   [Install]
@@ -1511,6 +1512,7 @@ Create a user systemd service files ``~/.config/systemd/user/rnsd.service`` with
   Type=simple
   Restart=always
   RestartSec=3
+  Environment=MALLOC_ARENA_MAX=2
   ExecStart=RNS_BIN_DIR/rnsd --service
 
   [Install]

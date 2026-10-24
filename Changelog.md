@@ -11,6 +11,7 @@
 - Added managed storage for known destinations and ratchets
 - Added managed storage for cached announces
 - Added more comprehensive metrics to status output structure
+- Added heap-tracking memory management
 - Optimized announce rate table implementation
 - Optimized packet filter hashlist implementation
 - Fixed `RNodeInterface` phy stats regression on Android
