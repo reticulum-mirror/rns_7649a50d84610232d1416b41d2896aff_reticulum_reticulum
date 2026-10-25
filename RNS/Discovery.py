@@ -287,6 +287,11 @@ class InterfaceAnnounceHandler:
                 signed    = flags & self.FLAG_SIGNED
                 encrypted = flags & self.FLAG_ENCRYPTED
                 fullhash  = RNS.Identity.full_hash(app_data)
+                hops      = RNS.Transport.hops_to(destination_hash)
+
+                if hops > RNS.Transport.PATHFINDER_M-1:
+                    RNS.log(f"Ignored discovered interface with invalid hop count", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
+                    return
 
                 if fullhash in self.invalid_cache:
                     RNS.log(f"Ignored previously discovered interface with insufficient stamp value", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
@@ -357,7 +362,7 @@ class InterfaceAnnounceHandler:
                                 "value":        value,
                                 "transport_id": RNS.hexrep(unpacked[TRANSPORT_ID], delimit=False),
                                 "network_id":   RNS.hexrep(announced_identity.hash, delimit=False),
-                                "hops":         RNS.Transport.hops_to(destination_hash),
+                                "hops":         hops,
                                 "latitude":     unpacked[LATITUDE],
                                 "longitude":    unpacked[LONGITUDE],
                                 "height":       unpacked[HEIGHT]}
