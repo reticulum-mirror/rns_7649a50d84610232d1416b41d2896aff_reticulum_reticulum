@@ -39,12 +39,12 @@ import itertools
 import contextlib
 import multiprocessing
 
-WORKBLOCK_EXPAND_ROUNDS         = 3000
-STAMP_SIZE                      = RNS.Identity.HASHLENGTH//8
-PN_VALIDATION_POOL_MIN_SIZE     = 256
-USE_WORKER_MANAGER              = False
-POOLING_THRESHOLD_COST          = 15
-STOP_CHECK_INTERVAL             = 64
+WORKBLOCK_EXPAND_ROUNDS     = 3000
+STAMP_SIZE                  = 32
+PN_VALIDATION_POOL_MIN_SIZE = 256
+USE_WORKER_MANAGER          = False
+POOLING_THRESHOLD_COST      = 15
+STOP_CHECK_INTERVAL         = 64
 
 active_jobs = {}
 
@@ -89,15 +89,8 @@ def stamp_workblock(material, expand_rounds=WORKBLOCK_EXPAND_ROUNDS, no_expand=F
     return workblock
 
 def stamp_value(workblock, stamp):
-    value = 0
-    bits = 256
     material = RNS.Identity.full_hash(workblock+stamp)
-    i = int.from_bytes(material, byteorder="big")
-    while ((i & (1 << (bits - 1))) == 0):
-        i = (i << 1)
-        value += 1
- 
-    return value
+    return 256 - int.from_bytes(material, byteorder="big").bit_length()
 
 def stamp_valid(stamp, target_cost, workblock):
     target = 0b1 << 256-target_cost
@@ -105,8 +98,9 @@ def stamp_valid(stamp, target_cost, workblock):
     if int.from_bytes(result, byteorder="big") > target: return False
     else: return True
 
-def generate_stamp(message_id, stamp_cost, expand_rounds=WORKBLOCK_EXPAND_ROUNDS, no_expand=False):
-    RNS.log(f"Generating stamp with cost {stamp_cost} for {RNS.prettyhexrep(message_id)}...", RNS.LOG_DEBUG)
+def generate_stamp(message_id, stamp_cost, expand_rounds=WORKBLOCK_EXPAND_ROUNDS, no_expand=False, size=STAMP_SIZE):
+    if stamp_cost < 0 or stamp_cost > RNS.Transport.STAMP_COST_CAP: raise ValueError("Invalid stamp cost, cannot generate")
+    RNS.log(f"Generating stamp with cost {stamp_cost} for <{RNS.hexrep(message_id[:16], delimit=False)}{'…' if len(message_id) > 16 else ''}>", RNS.LOG_DEBUG)
     workblock = stamp_workblock(message_id, expand_rounds=expand_rounds, no_expand=no_expand)
     
     start_time = time.time()
@@ -115,13 +109,13 @@ def generate_stamp(message_id, stamp_cost, expand_rounds=WORKBLOCK_EXPAND_ROUNDS
     value = 0
 
     if RNS.vendor.platformutils.is_windows() or RNS.vendor.platformutils.is_darwin():
-        RNS.log(f"Running stamp generation on {platform}, work limited to single CPU core. This will be slower than ideal.", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+        RNS.log(f"Multi-core stamp generation on this platform is not supported, work limited to single CPU core.", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
 
-    if RNS.vendor.platformutils.is_windows() or RNS.vendor.platformutils.is_darwin(): stamp, rounds = job_simple(stamp_cost, workblock, message_id)
-    elif RNS.vendor.platformutils.is_android(): stamp, rounds = job_android(stamp_cost, workblock, message_id)
+    if RNS.vendor.platformutils.is_windows() or RNS.vendor.platformutils.is_darwin(): stamp, rounds = job_simple(stamp_cost, workblock, message_id, size)
+    elif RNS.vendor.platformutils.is_android(): stamp, rounds = job_android(stamp_cost, workblock, message_id, size)
     else:
-        if USE_WORKER_MANAGER: stamp, rounds = job_linux_managed(stamp_cost, workblock, message_id) if stamp_cost >= POOLING_THRESHOLD_COST else job_simple(stamp_cost, workblock, message_id)
-        else:                  stamp, rounds = job_linux(stamp_cost, workblock, message_id) if stamp_cost >= POOLING_THRESHOLD_COST else job_simple(stamp_cost, workblock, message_id)
+        if USE_WORKER_MANAGER: stamp, rounds = job_linux_managed(stamp_cost, workblock, message_id, size) if stamp_cost >= POOLING_THRESHOLD_COST else job_simple(stamp_cost, workblock, message_id, size)
+        else:                  stamp, rounds = job_linux(stamp_cost, workblock, message_id, size) if stamp_cost >= POOLING_THRESHOLD_COST else job_simple(stamp_cost, workblock, message_id, size)
     
     duration = max(time.time()-start_time, 1E-6)
     speed = rounds/duration
@@ -163,14 +157,14 @@ def cancel_work(message_id):
             RNS.log("Error while terminating stamp generation workers: {e}", RNS.LOG_ERROR)
             RNS.trace_exception(e)
 
-def job_simple(stamp_cost, workblock, message_id):
+def job_simple(stamp_cost, workblock, message_id, size):
     # A simple, single-process stamp generator.
     # should work on any platform, and is used
     # as a fall-back, in case of limited multi-
     # processing and/or acceleration support.
 
     rounds = 0
-    pstamp = os.urandom(256//8)
+    pstamp = os.urandom(size)
     st = time.time()
 
     active_jobs[message_id] = False
@@ -185,7 +179,7 @@ def job_simple(stamp_cost, workblock, message_id):
             if active_jobs[message_id]: break
 
         if int.from_bytes(RNS.Identity.full_hash(workblock+pstamp), byteorder="big") <= target: break
-        pstamp = os.urandom(256//8); rounds += 1
+        pstamp = os.urandom(size); rounds += 1
 
         if rounds % 250000 == 0:
             speed = rounds / max(time.time()-st, 1E-6)
@@ -195,7 +189,7 @@ def job_simple(stamp_cost, workblock, message_id):
     active_jobs.pop(message_id)
     return (None if cancelled else pstamp), rounds
 
-def job_linux_managed(stamp_cost, workblock, message_id):
+def job_linux_managed(stamp_cost, workblock, message_id, size):
     ctx = multiprocessing.get_context("fork")
     cores = multiprocessing.cpu_count()
     jobs = cores if cores <= 12 else int(cores/2)
@@ -208,7 +202,7 @@ def job_linux_managed(stamp_cost, workblock, message_id):
         RNS.log(f"Starting {jobs} stamp generation workers", RNS.LOG_DEBUG)
         
         def job(stop_event, sc, wb, pn):
-            rounds = 0; pstamp = os.urandom(256//8);
+            rounds = 0; pstamp = os.urandom(size);
             target = 0b1<<256 - sc; c = 0
 
             while True:
@@ -219,7 +213,7 @@ def job_linux_managed(stamp_cost, workblock, message_id):
 
                 m = wb+pstamp
                 if int.from_bytes(RNS.Identity.full_hash(m), byteorder="big") <= target: break
-                pstamp = os.urandom(256//8); rounds += 1
+                pstamp = os.urandom(size); rounds += 1
 
             if not stop_event.is_set():
                 stop_event.set()
@@ -278,7 +272,7 @@ def job_linux_managed(stamp_cost, workblock, message_id):
 
     return stamp, total_rounds
 
-def job_linux(stamp_cost, workblock, message_id):
+def job_linux(stamp_cost, workblock, message_id, size):
     allow_kill = True
     stamp = None
     total_rounds = 0
@@ -289,7 +283,7 @@ def job_linux(stamp_cost, workblock, message_id):
     rounds_queue = multiprocessing.Queue()
 
     def job(stop_event, pn, sc, wb):
-        rounds = 0; pstamp = os.urandom(256//8);
+        rounds = 0; pstamp = os.urandom(size);
         target = 0b1<<256 - sc; c = 0
 
         while True:
@@ -300,7 +294,7 @@ def job_linux(stamp_cost, workblock, message_id):
 
             m = wb+pstamp
             if int.from_bytes(RNS.Identity.full_hash(m), byteorder="big") <= target: break
-            pstamp = os.urandom(256//8); rounds += 1
+            pstamp = os.urandom(size); rounds += 1
 
         if not stop_event.is_set():
             stop_event.set()
@@ -361,7 +355,7 @@ def job_linux(stamp_cost, workblock, message_id):
 
     return stamp, total_rounds
 
-def job_android(stamp_cost, workblock, message_id):
+def job_android(stamp_cost, workblock, message_id, size):
     # Semaphore support is flaky to non-existent on
     # Android, so we need to manually dispatch and
     # manage workloads here, while periodically
@@ -395,7 +389,7 @@ def job_android(stamp_cost, workblock, message_id):
             fh = full_hash
 
             while True:
-                pstamp = os.urandom(256//8)
+                pstamp = os.urandom(size)
                 rounds += 1
                 if int.from_bytes(fh(wb+pstamp), byteorder="big") <= target:
                     found_stamp = pstamp; break
@@ -442,3 +436,70 @@ def job_android(stamp_cost, workblock, message_id):
     active_jobs.pop(message_id)
 
     return stamp, total_rounds
+
+###########################
+# Persistence and loading #
+###########################
+
+DESTINATION_STAMP_EXTENSION = ".dstamp"
+STAMP_FILE_VERSION          = 1
+
+def stamps_dir(create=False):
+    storagepath = RNS.Reticulum.storagepath
+    if not storagepath: return None
+    path = os.path.join(storagepath, "stamps")
+    if create and not os.path.isdir(path):
+        try: os.makedirs(path, exist_ok=True)
+        except Exception as e:
+            RNS.log(f"An error occurred while creating destination stamp storage path: {e}", RNS.LOG_WARNING)
+            return None
+    return path
+
+def destination_stamp_file(destination_hash, create=False):
+    dir_path = stamps_dir(create=create)
+    if dir_path == None: return None
+    return os.path.join(dir_path, RNS.hexrep(destination_hash, delimit=False)+DESTINATION_STAMP_EXTENSION)
+
+def store_destination_stamp(destination_hash, stamp, stamp_value):
+    file_path = destination_stamp_file(destination_hash, create=True)
+    if file_path == None:
+        RNS.log("No storage path available, destination stamp not persisted", RNS.LOG_WARNING)
+        return False
+
+    try:
+        data = msgpack.packb({"v": STAMP_FILE_VERSION, "stamp":   stamp,
+                              "value":   stamp_value, "generated": time.time()})
+
+        temp_path = file_path+f".{os.getpid()}.tmp"
+        with open(temp_path, "wb") as temp_file: temp_file.write(data)
+        os.replace(temp_path, file_path)
+        return True
+
+    except Exception as e:
+        RNS.log(f"An error occurred while persisting destination stamp: {e}", RNS.LOG_WARNING)
+        return False
+
+def load_destination_stamp(destination_hash, material, required_value):
+    file_path = destination_stamp_file(destination_hash)
+    if file_path == None or not os.path.isfile(file_path): return None
+
+    try:
+        with open(file_path, "rb") as stamp_file: entry = msgpack.unpackb(stamp_file.read())
+        if entry.get("v") != STAMP_FILE_VERSION: return None
+        workblock = stamp_workblock(material, expand_rounds=0)
+
+        stamp = entry["stamp"]
+        if not isinstance(stamp, bytes) or len(stamp) != RNS.Identity.STAMPLENGTH:
+            RNS.log(f"Stored stamp for {RNS.prettyhexrep(destination_hash)} has invalid format. Regenerating on next announce.", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+            return None
+
+        value = stamp_value(workblock, stamp)
+        if value < required_value:
+            RNS.log(f"Stored stamp for {RNS.prettyhexrep(destination_hash)} has value {value}, below required {required_value}. Regenerating on next announce.", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+            return None
+
+        return (stamp, value)
+
+    except Exception as e:
+        RNS.log(f"Ignoring unreadable destination stamp file for {RNS.prettyhexrep(destination_hash)}: {e}", RNS.LOG_WARNING)
+        return None

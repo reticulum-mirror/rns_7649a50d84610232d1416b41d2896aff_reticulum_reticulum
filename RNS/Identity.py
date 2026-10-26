@@ -41,6 +41,7 @@ from .vendor import umsgpack as umsgpack
 from RNS.Cryptography import X25519PrivateKey, X25519PublicKey, Ed25519PrivateKey, Ed25519PublicKey
 from RNS.Cryptography import Token
 from RNS.Storage import KnownDestinationsStore
+from RNS.Stamps import stamp_workblock, stamp_valid, stamp_value
 
 
 class Identity:
@@ -80,6 +81,10 @@ class Identity:
     AES256_BLOCKSIZE          = 16          # In bytes
     HASHLENGTH                = 256         # In bits
     SIGLENGTH                 = KEYSIZE     # In bits
+    STAMPLENGTH               = 14          # In bytes
+    EXTHEADERLENGTH           = 2           # In bytes
+    EXTPAYLOADLENGTH          = EXTHEADERLENGTH+STAMPLENGTH
+    EXTPAYLOADMARKER          = 0xC1 # Never used at msgpack object boundaries
 
     NAME_HASH_LENGTH          = 80
     TRUNCATED_HASHLENGTH      = RNS.Reticulum.TRUNCATED_HASHLENGTH
@@ -100,19 +105,21 @@ class Identity:
     known_destinations_lock = threading.Lock()
 
     @staticmethod
-    def remember(packet_hash, destination_hash, public_key, app_data = None):
-        if len(public_key) != Identity.KEYSIZE//8:
-            raise TypeError("Can't remember "+RNS.prettyhexrep(destination_hash)+", the public key size of "+str(len(public_key))+" is not valid.", RNS.LOG_ERROR)
+    def remember(packet_hash, destination_hash, public_key, app_data=None, stamp=None, stamp_value=0):
+        if stamp_value == None: stamp_value = 0
+        if len(public_key) != Identity.KEYSIZE//8: raise TypeError(f"Can't remember {RNS.prettyhexrep(destination_hash)}, the public key size of {len(public_key)} is not valid.", RNS.LOG_ERROR)
         else:
             with Identity.known_destinations_lock:
                 if not destination_hash in Identity.known_destinations:
-                    Identity.known_destinations[destination_hash] = [time.time(), packet_hash, public_key, app_data, 0, None, 0]
+                    Identity.known_destinations[destination_hash] = [time.time(), packet_hash, public_key, app_data, 0, stamp, stamp_value]
                 else:
                     entry = Identity.known_destinations[destination_hash]
                     entry[0] = time.time()
                     entry[1] = packet_hash
                     entry[2] = public_key
                     entry[3] = app_data
+                    entry[5] = stamp
+                    entry[6] = stamp_value
 
                 Identity._kd_mark_dirty(destination_hash)
 
@@ -176,6 +183,18 @@ class Identity:
             return app_data
         
         else: return None
+
+    @staticmethod
+    def recall_stamp_value(destination_hash):
+        """
+        Recall last heard announce stamp value for a destination hash.
+
+        :param destination_hash: Destination hash as *bytes*.
+        :returns: *Integer*, or *None* if the destination is unknown.
+        """
+        known_destination = Identity.known_destinations.get(destination_hash)
+        if not known_destination: return None
+        else:                     return known_destination[6]
 
     @staticmethod
     def save_known_destinations(background=False, recombine=False):
@@ -637,7 +656,8 @@ class Identity:
             return None
 
     @staticmethod
-    def validate_announce(packet, only_validate_signature=False, signal_blackholed=False):
+    def validate_announce(packet, only_validate_signature=False, signal_blackholed=False, signal_stamp=False, required_value=None):
+        if required_value == None: required_value = RNS.Transport.DESTINATION_COST
         try:
             if packet.packet_type == RNS.Packet.ANNOUNCE:
                 keysize       = Identity.KEYSIZE//8
@@ -649,11 +669,14 @@ class Identity:
                 # Get public key bytes from announce
                 public_key = packet.data[:keysize]
 
+                # Shared format structure
+                ratchet     = b""
+                name_hash   = packet.data[keysize:keysize+name_hash_len]
+                random_hash = packet.data[keysize+name_hash_len:keysize+name_hash_len+10]
+
                 # If the packet context flag is set,
                 # this announce contains a new ratchet
                 if packet.context_flag == RNS.Packet.FLAG_SET:
-                    name_hash   = packet.data[keysize:keysize+name_hash_len ]
-                    random_hash = packet.data[keysize+name_hash_len:keysize+name_hash_len+10]
                     ratchet     = packet.data[keysize+name_hash_len+10:keysize+name_hash_len+10+ratchetsize]
                     signature   = packet.data[keysize+name_hash_len+10+ratchetsize:keysize+name_hash_len+10+ratchetsize+sig_len]
                     app_data    = b""
@@ -663,9 +686,6 @@ class Identity:
                 # If the packet context flag is not set,
                 # this announce does not contain a ratchet
                 else:
-                    ratchet     = b""
-                    name_hash   = packet.data[keysize:keysize+name_hash_len]
-                    random_hash = packet.data[keysize+name_hash_len:keysize+name_hash_len+10]
                     signature   = packet.data[keysize+name_hash_len+10:keysize+name_hash_len+10+sig_len]
                     app_data    = b""
                     if len(packet.data) > keysize+name_hash_len+10+sig_len:
@@ -675,6 +695,48 @@ class Identity:
 
                 if not len(packet.data) > Identity.KEYSIZE//8+Identity.NAME_HASH_LENGTH//8+10+Identity.SIGLENGTH//8:
                     app_data = None
+
+                stamp           = None
+                dst_stamped     = None
+                dst_value       = None
+                stamp_validated = None
+                if RNS.Transport.STAMPS_ENABLED and app_data and len(app_data) >= Identity.EXTPAYLOADLENGTH:
+                    ext_payload = app_data[-Identity.EXTPAYLOADLENGTH:]
+                    ext_header  = ext_payload[:Identity.EXTHEADERLENGTH]
+                    ext_flags   = ext_header[1] # Reserved for future extensions
+                    if not ext_header[0] == Identity.EXTPAYLOADMARKER: dst_stamped = False
+                    else:
+                        # RNS.log(f"Checking potential stamp in announce with app_data len {len(app_data)} for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) # TODO: Remove
+                        dst_stamped = True
+                        try:
+                            stamp    = ext_payload[Identity.EXTHEADERLENGTH:Identity.EXTHEADERLENGTH+Identity.STAMPLENGTH]
+                            material = destination_hash+public_key+name_hash
+                            wb       = stamp_workblock(material, expand_rounds=0)
+                            valid    = stamp_valid(stamp, required_value, wb)
+
+                            if valid:
+                                app_data = app_data[:-Identity.EXTPAYLOADLENGTH]
+                                if not len(app_data): app_data = None
+                                stamp_validated = True
+                                dst_value       = stamp_value(wb, stamp)
+
+                        except Exception as e: RNS.log(f"Announce stamp parsing failed: {e}", RNS.LOG_ERROR)
+
+                # TODO: Initial debug only, remove ######
+                # if RNS.sl(RNS.LOG_DEBUG):
+                #     if not dst_stamped: RNS.log(f"No stamp on announce from {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG)
+                #     else:
+                #         if not stamp_validated: RNS.log(f"Invalid or insufficient-value stamp for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG)
+                #         else:                   RNS.log(f"Valid stamp with value {dst_value} for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG)
+                #########################################
+
+                if RNS.Transport.STAMPS_ENABLED and RNS.Transport.STAMPS_ENFORCED:
+                    if not dst_stamped:
+                        if signal_stamp: return "no_stamp"
+                        else:            return False
+                    elif not stamp_validated:
+                        if signal_stamp: return "invalid_stamp"
+                        else:            return False
 
                 announced_identity = Identity(create_keys=False)
                 announced_identity.load_public_key(public_key)
@@ -705,7 +767,9 @@ class Identity:
                                 RNS.log("This may indicate an attempt to modify network paths, or a random hash collision. The announce was rejected.", RNS.LOG_CRITICAL)
                                 return False
 
-                        RNS.Identity.remember(packet.get_hash(), destination_hash, public_key, app_data)
+                        RNS.Identity.remember(packet.get_hash(), destination_hash, public_key,
+                                              app_data=app_data, stamp=stamp, stamp_value=dst_value)
+
                         del announced_identity
 
                         if packet.rssi != None or packet.snr != None:

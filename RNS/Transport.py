@@ -95,6 +95,46 @@ class InboundQueues:
             dropped = tuple(d for d in self._dropped)
         return (sum(heights), heights, dropped)
 
+class WorkerQueues:
+    __slots__ = ("_cond", "_queues", "_sizes")
+
+    def __init__(self, sizes):
+        self._cond    = Condition()
+        self._queues  = [deque() for _ in sizes]
+        self._sizes   = sizes
+
+    def put(self, priority, key, item):
+        with self._cond:
+            q = self._queues[priority]
+
+            if key != None:
+                i = 0
+                while i < len(q):
+                    if q[i][0] == key: del q[i]
+                    else:              i += 1
+
+            if len(q) >= self._sizes[priority]: raise Full
+
+            q.append((key, item))
+            self._cond.notify()
+
+    def get(self, block=True, timeout=None):
+        deadline = None if timeout is None else time.monotonic() + timeout
+        with self._cond:
+            while True:
+                # Scan queues in priority order
+                for q in self._queues:
+                    if q: return q.popleft()
+                if not block: raise Empty
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0: raise Empty
+                self._cond.wait(remaining)
+
+    def qsize(self, priority=None):
+        with self._cond:
+            if priority != None: return len(self._queues[priority])
+            else:                return sum(len(q) for q in self._queues)
+
 class Transport:
     """
     Through static methods of this class you can interact with the
@@ -146,6 +186,24 @@ class Transport:
     INBOUND_AN_QUEUE_LENGTH     = 128
     INBOUND_PR_QUEUE_LENGTH     = 128
     INBOUND_IL_QUEUE_LENGTH     = 8
+
+    STAMPS_ENABLED              = True         # Whether to check for and validate stamps on announces and path requests
+    STAMPS_ENFORCED             = False        # Whether to enforce stamp requirements
+    STAMP_DESTINATIONS          = False        # Whether to stamp destination announces emitted from this instance
+    STAMP_PRS                   = False        # Whether to stamp path requests emitted from this instance
+    STAMP_COST_CAP              = 100          # Global hard cap on stamp cost to ensure search-space viability at 14-byte stamp sizes
+    DESTINATION_COST            = 18           # Default required announce cost if no specifics configured or determined
+    DESTINATION_VALUE           = 18           # Default target stamp value for emitted announces
+    PR_COST                     = 18           # Default required path request cost if no specifics configured or determined
+    PR_VALUE                    = 18           # Default target stamp value for emitted path requests
+
+    STAMPER_PR_QUEUE_LENGTH     = 32           # TODO: Provisional, wire to config handling
+    STAMPER_AN_QUEUE_LENGTH     = 32           # TODO: Provisional, wire to config handling
+    STAMP_PR_PRIORITY           = 0
+    STAMP_DST_PRIORITY          = 1
+    stamper_thread              = None
+    stamper_thread_lock         = Lock()
+    stamp_queues                = WorkerQueues((STAMPER_PR_QUEUE_LENGTH, STAMPER_AN_QUEUE_LENGTH))
 
     STATE_UNKNOWN               = 0x00
     STATE_UNRESPONSIVE          = 0x01
@@ -580,6 +638,9 @@ class Transport:
         for n in range(Transport.TRANSPORT_WORKERS):
             if Transport.USE_INBOUND_QUEUE:  threading.Thread(target=Transport.inbound_job,  daemon=True).start()
             if Transport.USE_OUTBOUND_QUEUE: threading.Thread(target=Transport.outbound_job, daemon=True).start()
+
+        # Spawn the stamp worker
+        Transport.ensure_stamper()
 
         Transport.ready = True
 
@@ -1335,6 +1396,41 @@ class Transport:
             RNS.log(f"Error while finalizing transport jobs: {e}", RNS.LOG_ERROR)
             RNS.trace_exception(e)
 
+    @staticmethod
+    def ensure_stamper():
+        if Transport.stamper_thread != None and Transport.stamper_thread.is_alive(): return
+        with Transport.stamper_thread_lock:
+            if Transport.stamper_thread == None or not Transport.stamper_thread.is_alive():
+                Transport.stamper_thread = threading.Thread(target=Transport.stamper_job, daemon=True)
+                RNS.log("Starting announce stamper worker", RNS.LOG_DEBUG)
+                Transport.stamper_thread.start()
+
+    @staticmethod
+    def queue_stamped_announce(destination, app_data=None, path_response=False, attached_interface=None, tag=None):
+        priority = Transport.STAMP_PR_PRIORITY if path_response else Transport.STAMP_DST_PRIORITY
+        key      = None if path_response else destination.hash
+
+        try: Transport.stamp_queues.put(priority, key, (destination, app_data, path_response, attached_interface, tag))
+        except Full:
+            RNS.log(f"Stamp queue full, dropping announce for {RNS.prettyhexrep(destination.hash)}", RNS.LOG_DEBUG)
+            return
+
+        Transport.ensure_stamper()
+
+    @staticmethod
+    def stamper_job():
+        while Transport._should_run:
+            try: key, job = Transport.stamp_queues.get(block=True, timeout=1)
+            except Empty: continue
+
+            destination, app_data, path_response, attached_interface, tag = job
+
+            try: destination._announce(app_data=app_data, path_response=path_response,
+                                       attached_interface=attached_interface, tag=tag, send=True)
+            except Exception as e:
+                RNS.log(f"Error while stamping and emitting announce for {RNS.prettyhexrep(destination.hash)}: {e}", RNS.LOG_ERROR)
+                RNS.trace_exception(e)
+
     discovery_pr_tx_throttle = 0.5
     discovery_pr_tx_lock     = Lock()
     discovery_pr_handle_lock = Lock()
@@ -1898,8 +1994,10 @@ class Transport:
         if packet.packet_type == RNS.Packet.ANNOUNCE:
             if len(raw) > RNS.Reticulum.MTU: return packet.receiving_interface.protocol_violation(f"Excessive announce packet frame size of {len(raw)} bytes") if packet.receiving_interface else None
             if traffic_class < Transport.TC_ANNOUNCE: traffic_class = Transport.TC_ANNOUNCE
-            announce_signature_valid = RNS.Identity.validate_announce(packet, only_validate_signature=True, signal_blackholed=True)
-            if announce_signature_valid == "blackholed": return None
+            announce_signature_valid = RNS.Identity.validate_announce(packet, only_validate_signature=True, signal_blackholed=True, signal_stamp=True)
+            if   announce_signature_valid == "blackholed":    return None
+            elif announce_signature_valid == "no_stamp":      return None
+            elif announce_signature_valid == "invalid_stamp": return None
             elif not announce_signature_valid:
                 return packet.receiving_interface.protocol_violation(f"Invalid announce signature for {RNS.prettyhexrep(packet.destination_hash)}") if packet.receiving_interface else None
 
@@ -2546,7 +2644,11 @@ class Transport:
                                 with Transport.path_table_lock: Transport.path_table[packet.destination_hash] = path_table_entry
 
                             Transport.mark_path_unknown_state(packet.destination_hash)
-                            RNS.log("Destination "+RNS.prettyhexrep(packet.destination_hash)+" is now "+str(announce_hops)+" hops away via "+RNS.prettyhexrep(received_from)+" on "+str(packet.receiving_interface), RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
+                            if RNS.sl(RNS.LOG_PATHING):
+                                destination_value = RNS.Identity.recall_stamp_value(packet.destination_hash)
+                                value_str = f" (value {destination_value})" if destination_value else " (unstamped)"
+                                RNS.log(f"Destination {RNS.prettyhexrep(packet.destination_hash)}{value_str} is now {announce_hops} hops away via {RNS.prettyhexrep(received_from)} on {packet.receiving_interface}", RNS.LOG_PATHING)
+
                             if packet.destination_hash in Transport.path_requests:
                                 RNS.Reticulum.get_instance()._used_destination_data(packet.destination_hash)
 

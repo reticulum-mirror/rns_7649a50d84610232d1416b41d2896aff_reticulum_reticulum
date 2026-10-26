@@ -35,6 +35,7 @@ import threading
 import RNS
 
 from RNS.Cryptography import Token
+from RNS.Stamps import generate_stamp, store_destination_stamp, load_destination_stamp
 from .vendor import umsgpack as umsgpack
 
 class Callbacks:
@@ -159,6 +160,8 @@ class Destination:
         self.type = type
         self.direction = direction
         self.proof_strategy = Destination.PROVE_NONE
+        self.stamp = None
+        self.stamp_value = None
         self.ratchets = None
         self.ratchets_path = None
         self.ratchet_interval = Destination.RATCHET_INTERVAL
@@ -189,6 +192,13 @@ class Destination:
         self.hash = Destination.hash(self.identity, app_name, *aspects)
         self.name_hash = RNS.Identity.full_hash(self.expand_name(None, app_name, *aspects).encode("utf-8"))[:(RNS.Identity.NAME_HASH_LENGTH//8)]
         self.hexhash = self.hash.hex()
+
+        # Load existing stamp if available
+        if self.direction == Destination.IN and self.identity != None and self.identity.prv != None and RNS.Transport.STAMP_DESTINATIONS:
+            stamp_entry = load_destination_stamp(self.hash, self.stamp_material(), RNS.Transport.DESTINATION_COST)
+            if stamp_entry != None:
+                self.stamp, self.stamp_value = stamp_entry
+                RNS.log(f"Loaded stamp with value {self.stamp_value} for {self}", RNS.LOG_DEBUG)
 
         self.default_app_data = None
         self.callback = None
@@ -249,12 +259,20 @@ class Destination:
         :param app_data: *bytes* containing the app_data.
         :param path_response: Internal flag used by :ref:`RNS.Transport<api-transport>`. Ignore.
         """
-        if self.type != Destination.SINGLE:
-            raise TypeError("Only SINGLE destination types can be announced")
+        if self.type != Destination.SINGLE:  raise TypeError("Only SINGLE destination types can be announced")
+        if self.direction != Destination.IN: raise TypeError("Only IN destination types can be announced")
 
-        if self.direction != Destination.IN:
-            raise TypeError("Only IN destination types can be announced")
-        
+        if send and RNS.Transport.STAMP_DESTINATIONS and self.stamp == None:
+            # If no stamp is available, queue for background generation
+            # and announce emission once ready.
+            RNS.Transport.queue_stamped_announce(self, app_data=app_data, path_response=path_response,
+                                                 attached_interface=attached_interface, tag=tag)
+        else:
+            # Otherwise, dispatch immediately.
+            return self._announce(app_data=app_data, path_response=path_response,
+                                  attached_interface=attached_interface, tag=tag, send=send)
+
+    def _announce(self, app_data=None, path_response=False, attached_interface=None, tag=None, send=True):
         ratchet = b""
         now = time.time()
         stale_responses = []
@@ -294,6 +312,26 @@ class Destination:
                     returned_app_data = self.default_app_data()
                     if isinstance(returned_app_data, bytes):
                         app_data = returned_app_data
+
+            if RNS.Transport.STAMP_DESTINATIONS:
+                if self.stamp == None:
+                    stamp_entry = load_destination_stamp(self.hash, self.stamp_material(), RNS.Transport.DESTINATION_COST)
+                    if stamp_entry != None: self.stamp, self.stamp_value = stamp_entry
+                    else:
+                        stamp, stamp_value = generate_stamp(self.stamp_material(), stamp_cost=RNS.Transport.DESTINATION_VALUE,
+                                                            expand_rounds=0, size=RNS.Identity.STAMPLENGTH)
+                        if stamp == None:
+                            RNS.log(f"Could not generate destination stamp for {RNS.prettyhexrep(self.hash)}, announce emission cancelled", RNS.LOG_WARNING)
+                            return
+
+                        self.stamp       = stamp
+                        self.stamp_value = stamp_value
+                        store_destination_stamp(self.hash, stamp, stamp_value)
+                        RNS.log(f"Generated and persisted stamp with value {self.stamp_value} for {self}", RNS.LOG_DEBUG)
+
+                ext_payload = bytes([RNS.Identity.EXTPAYLOADMARKER, self.get_ext_flags()])+self.stamp
+                if app_data == None: app_data = ext_payload
+                else:                app_data = app_data+ext_payload
             
             signed_data = self.hash+self.identity.get_public_key()+self.name_hash+random_hash+ratchet
             if app_data != None: signed_data += app_data
@@ -316,6 +354,12 @@ class Destination:
         
         if send: announce_packet.send()
         else:    return announce_packet
+
+    def stamp_material(self):
+        return self.hash+self.identity.get_public_key()+self.name_hash
+
+    def get_ext_flags(self):
+        return 0x00
 
     def accepts_links(self, accepts = None):
         """
