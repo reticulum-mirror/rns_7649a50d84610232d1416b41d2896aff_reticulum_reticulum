@@ -192,8 +192,8 @@ class Transport:
     STAMP_DESTINATIONS          = False        # Whether to stamp destination announces emitted from this instance
     STAMP_PRS                   = False        # Whether to stamp path requests emitted from this instance
     STAMP_COST_CAP              = 100          # Global hard cap on stamp cost to ensure search-space viability at 14-byte stamp sizes
-    DESTINATION_COST            = 20           # Default required announce cost if no specifics configured or determined
-    DESTINATION_VALUE           = 20           # Default target stamp value for emitted announces
+    DESTINATION_COST            = 23           # Default required announce cost if no specifics configured or determined
+    DESTINATION_VALUE           = 23           # Default target stamp value for emitted announces
     PR_COST                     = 19           # Default required path request cost if no specifics configured or determined
     PR_VALUE                    = 19           # Default target stamp value for emitted path requests
 
@@ -1015,6 +1015,7 @@ class Transport:
                             else:
                                 if time.time() > link_entry[IDX_LT_PROOF_TMO]:
                                     stale_links.append(link_id)
+                                    blocked_if = None
 
                                     last_path_request = 0
                                     with Transport.path_requests_lock:
@@ -1451,8 +1452,9 @@ class Transport:
                 if destination_hash:
                     if blocked_if == None: Transport.request_path(destination_hash)
                     else:
+                        request_tag = RNS.Identity.get_random_hash()
                         for interface in Transport.interfaces:
-                            if interface != blocked_if: Transport.request_path(destination_hash, on_interface=interface)
+                            if interface != blocked_if: Transport.request_path(destination_hash, on_interface=interface, tag=request_tag)
                             else: pass
 
 
@@ -3818,7 +3820,7 @@ class Transport:
             request_tag = RNS.Identity.get_random_hash()
             for interface in Transport.interfaces:
                 if not interface == attached_interface:
-                    Transport.request_path(destination_hash, interface, tag = request_tag)
+                    Transport.request_path(destination_hash, interface, tag=request_tag)
 
         elif should_search_for_unknown:
             with Transport.discovery_pr_lock:
@@ -3876,12 +3878,13 @@ class Transport:
         elif not is_from_local_client and len(Transport.local_client_interfaces) > 0:
             # Forward the path request on all local
             # client interfaces
-            RNS.log("Forwarding path request for "+RNS.prettyhexrep(destination_hash)+interface_str+" to local clients", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
+            RNS.log(f"Forwarding path request for {RNS.prettyhexrep(destination_hash)}{interface_str} to local clients", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
+            request_tag = RNS.Identity.get_random_hash()
             for interface in Transport.local_client_interfaces:
-                Transport.request_path(destination_hash, on_interface=interface)
+                Transport.request_path(destination_hash, on_interface=interface, tag=request_tag)
 
         else:
-            RNS.log("Ignoring path request for "+RNS.prettyhexrep(destination_hash)+interface_str+", no path known", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
+            RNS.log(f"Ignoring path request for {RNS.prettyhexrep(destination_hash)}{interface_str}, no path known", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
 
         if answered:
             # Resolve potential in-flight path requests
