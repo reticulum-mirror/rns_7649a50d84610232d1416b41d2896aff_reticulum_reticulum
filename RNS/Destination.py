@@ -265,8 +265,8 @@ class Destination:
         if send and RNS.Transport.STAMP_DESTINATIONS and self.stamp == None:
             # If no stamp is available, queue for background generation
             # and announce emission once ready.
-            RNS.Transport.queue_stamped_announce(self, app_data=app_data, path_response=path_response,
-                                                 attached_interface=attached_interface, tag=tag)
+            RNS.Transport.enqueue_stamped_announce(self, app_data=app_data, path_response=path_response,
+                                                   attached_interface=attached_interface, tag=tag)
         else:
             # Otherwise, dispatch immediately.
             return self._announce(app_data=app_data, path_response=path_response,

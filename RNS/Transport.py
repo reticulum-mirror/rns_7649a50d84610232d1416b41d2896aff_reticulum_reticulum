@@ -45,6 +45,7 @@ from threading import Lock, Condition
 from .vendor import umsgpack as umsgpack
 from RNS.Interfaces.BackboneInterface import BackboneInterface
 from RNS.Storage import AnnounceRateTable, PacketHashlist, AnnounceCache
+from RNS.Stamps import generate_stamp, stamp_workblock, stamp_valid, stamp_value
 
 class InboundQueues:
     __slots__ = ("_cond", "_queues", "_sizes", "_dropped", "_hw_mark")
@@ -204,6 +205,9 @@ class Transport:
     stamper_thread              = None
     stamper_thread_lock         = Lock()
     stamp_queues                = WorkerQueues((STAMPER_PR_QUEUE_LENGTH, STAMPER_AN_QUEUE_LENGTH))
+    pr_stamp_cache              = {}           # Cache of generated path request stamps, keyed on stamp material
+    pr_stamp_cache_max          = 256          # Maximum number of cached path request stamps
+    pr_stamp_cache_lock         = Lock()
 
     STATE_UNKNOWN               = 0x00
     STATE_UNRESPONSIVE          = 0x01
@@ -791,6 +795,10 @@ class Transport:
                 Transport.pr_freq_tx         = opfreq
             
             except Exception as e: RNS.log(f"An error occurred while counting interface traffic: {e}", RNS.LOG_ERROR)
+
+    ##################
+    # Transport Jobs #
+    ##################
 
     @staticmethod
     def jobloop():
@@ -1398,6 +1406,14 @@ class Transport:
             RNS.trace_exception(e)
 
     @staticmethod
+    def handle_outgoing_announces(outgoing):
+        for packet in sorted(outgoing, key=lambda p: p.hops): packet.send()
+
+    #########################
+    # Stamp Work Management #
+    #########################
+
+    @staticmethod
     def ensure_stamper():
         if Transport.stamper_thread != None and Transport.stamper_thread.is_alive(): return
         with Transport.stamper_thread_lock:
@@ -1407,13 +1423,23 @@ class Transport:
                 Transport.stamper_thread.start()
 
     @staticmethod
-    def queue_stamped_announce(destination, app_data=None, path_response=False, attached_interface=None, tag=None):
+    def enqueue_stamped_announce(destination, app_data=None, path_response=False, attached_interface=None, tag=None):
         priority = Transport.STAMP_PR_PRIORITY if path_response else Transport.STAMP_DST_PRIORITY
         key      = None if path_response else destination.hash
 
-        try: Transport.stamp_queues.put(priority, key, (destination, app_data, path_response, attached_interface, tag))
+        try: Transport.stamp_queues.put(priority, key, ("announce", destination, app_data, path_response, attached_interface, tag))
         except Full:
             RNS.log(f"Stamp queue full, dropping announce for {RNS.prettyhexrep(destination.hash)}", RNS.LOG_DEBUG)
+            return
+
+        Transport.ensure_stamper()
+
+    @staticmethod
+    def enqueue_stamped_pr(destination_hash, on_interface=None, tag=None, recursive=False):
+        key = destination_hash if on_interface == None else destination_hash+on_interface.get_hash()
+        try: Transport.stamp_queues.put(Transport.STAMP_PR_PRIORITY, key, ("pr", destination_hash, on_interface, tag, recursive))
+        except Full:
+            RNS.log(f"Stamp queue full, dropping path request for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG)
             return
 
         Transport.ensure_stamper()
@@ -1423,44 +1449,24 @@ class Transport:
         while Transport._should_run:
             try: key, job = Transport.stamp_queues.get(block=True, timeout=1)
             except Empty: continue
+            job_type = job[0]
 
-            destination, app_data, path_response, attached_interface, tag = job
-
-            try: destination._announce(app_data=app_data, path_response=path_response,
-                                       attached_interface=attached_interface, tag=tag, send=True)
+            try:
+                if job_type == "pr":
+                    jt, destination_hash, on_interface, tag, recursive = job
+                    Transport.stamp_path_request(destination_hash, on_interface=on_interface, tag=tag, recursive=recursive)
+                else:
+                    jt, destination, app_data, path_response, attached_interface, tag = job
+                    destination._announce(app_data=app_data, path_response=path_response, attached_interface=attached_interface, tag=tag, send=True)
+            
             except Exception as e:
-                RNS.log(f"Error while stamping and emitting announce for {RNS.prettyhexrep(destination.hash)}: {e}", RNS.LOG_ERROR)
+                target = RNS.prettyhexrep(job[1]) if job_type == "pr" else RNS.prettyhexrep(job[1].hash)
+                RNS.log(f"Error while stamping and emitting {job_type} for {target}: {e}", RNS.LOG_ERROR)
                 RNS.trace_exception(e)
 
-    discovery_pr_tx_throttle = 0.5
-    discovery_pr_tx_lock     = Lock()
-    discovery_pr_handle_lock = Lock()
-    pending_discovery_prs    = deque(maxlen=max_queued_discovery_prs)
-    @staticmethod
-    def handle_disovery_path_requests():
-        if Transport.discovery_pr_handle_lock.locked(): return
-        with Transport.discovery_pr_handle_lock:
-            while len(Transport.pending_discovery_prs):
-                time.sleep(Transport.discovery_pr_tx_throttle)
-                destination_hash = None
-                blocked_if = None
-                with Transport.discovery_pr_tx_lock:
-                    entry = Transport.pending_discovery_prs.popleft()
-                    destination_hash = entry[0]
-                    blocked_if = entry[1]
-
-                if destination_hash:
-                    if blocked_if == None: Transport.request_path(destination_hash)
-                    else:
-                        request_tag = RNS.Identity.get_random_hash()
-                        for interface in Transport.interfaces:
-                            if interface != blocked_if: Transport.request_path(destination_hash, on_interface=interface, tag=request_tag)
-                            else: pass
-
-
-    @staticmethod
-    def handle_outgoing_announces(outgoing):
-        for packet in sorted(outgoing, key=lambda p: p.hops): packet.send()
+    ############
+    # Core I/O #
+    ############
 
     @staticmethod
     def handle_outgoing_ifac(interface, raw):
@@ -2024,20 +2030,21 @@ class Transport:
         elif packet.destination_hash == Transport.pr_destination_hash:
             if traffic_class < Transport.TC_PATH_REQUEST: traffic_class = Transport.TC_PATH_REQUEST
             if not len(packet.data) >= RNS.Identity.TRUNCATED_HASHLENGTH//8: return
+            elif len(packet.data) > Transport.PR_STAMPED_LENGTH: return packet.receiving_interface.protocol_violation(f"Excessive path request size of {len(packet.data)} bytes") if packet.receiving_interface else None
             else:
-                tag_bytes = None
-                tag_valid = False
-                destination_hash = packet.data[:RNS.Identity.TRUNCATED_HASHLENGTH//8]
-                if   len(packet.data) > (RNS.Identity.TRUNCATED_HASHLENGTH//8)*2: tag_bytes = packet.data[RNS.Identity.TRUNCATED_HASHLENGTH//8*2:]
-                elif len(packet.data) > (RNS.Identity.TRUNCATED_HASHLENGTH//8):   tag_bytes = packet.data[RNS.Identity.TRUNCATED_HASHLENGTH//8:]
-
-                if tag_bytes == None:
-                    RNS.log("Ignoring tagless path request for "+RNS.prettyhexrep(destination_hash), RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
+                pr = Transport.parse_path_request(packet.data)
+                if pr == None:
+                    destination_hash = packet.data[:RNS.Identity.TRUNCATED_HASHLENGTH//8]
+                    RNS.log(f"Ignoring tagless path request for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
                     return packet.receiving_interface.protocol_violation("Tagless path request") if packet.receiving_interface else None
 
                 else:
-                    if len(tag_bytes) > RNS.Identity.TRUNCATED_HASHLENGTH//8:
-                        tag_bytes = tag_bytes[:RNS.Identity.TRUNCATED_HASHLENGTH//8]
+                    destination_hash = pr[0]
+                    tag_bytes        = pr[2]
+                    ext_payload      = pr[3]
+                    tag_valid        = False
+
+                    if len(packet.data) > Transport.PR_LENGTH and len(packet.data) != Transport.PR_STAMPED_LENGTH:
                         if packet.receiving_interface: packet.receiving_interface.protocol_violation("Excessive path request tag size")
 
                     unique_tag = destination_hash+tag_bytes
@@ -2050,6 +2057,25 @@ class Transport:
                     if not tag_valid:
                         RNS.log("Ignoring duplicate path request for "+RNS.prettyhexrep(destination_hash)+" with tag "+RNS.prettyhexrep(unique_tag), RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
                         return
+
+                    if RNS.Transport.STAMPS_ENABLED:
+                        stamp_ok = False
+                        if ext_payload != None:
+                            if ext_payload[0] == RNS.Identity.EXTPAYLOADMARKER:
+                                stamp = ext_payload[RNS.Identity.EXTHEADERLENGTH:]
+                                stamp_ok = Transport.validate_pr_stamp(stamp, destination_hash, tag_bytes)
+                                if not stamp_ok: RNS.log(f"Invalid or insufficient path request stamp for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Reset level
+                            else: RNS.log(f"Unrecognized stamp payload in path request for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Reset level
+                        else: RNS.log(f"Unstamped path request for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Reset level
+
+                        if not stamp_ok:
+                            RNS.log(f"Insufficiently stamped path request for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Remove
+                            if RNS.Transport.STAMPS_ENFORCED: return
+
+                        else: # TODO: Remove
+                            workblock = stamp_workblock(Transport.pr_stamp_material(destination_hash, tag_bytes), expand_rounds=0) # TODO: Remove
+                            dval = stamp_value(workblock, ext_payload[RNS.Identity.EXTHEADERLENGTH:]) # TODO: Remove
+                            RNS.log(f"Stamped path request for {RNS.prettyhexrep(destination_hash)} with value {dval}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Remove
 
                     if packet.receiving_interface: packet.receiving_interface.received_path_request(size=len(raw))
                     Transport.pr_rxc += 1
@@ -2954,6 +2980,10 @@ class Transport:
                         with Transport.receipts_lock:
                             if receipt in Transport.receipts: Transport.receipts.remove(receipt)
 
+    #####################
+    # Tunnel Management #
+    #####################
+
     @staticmethod
     def synthesize_tunnel(interface):
         try:
@@ -3069,6 +3099,10 @@ class Transport:
                 RNS.log("Removing path to "+RNS.prettyhexrep(deprecated_path)+" from tunnel "+RNS.prettyhexrep(tunnel_id), RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
                 with Transport.tunnels_lock: paths.pop(deprecated_path)
 
+    ########################
+    # Destination Handling #
+    ########################
+
     @staticmethod
     def clean_destinations_map():
         with Transport.destinations_lock:
@@ -3121,6 +3155,37 @@ class Transport:
                 Transport.destinations_map.pop(destination.hash)
 
     @staticmethod
+    def register_announce_handler(handler):
+        """
+        Registers an announce handler.
+
+        :param handler: Must be an object with an *aspect_filter* attribute and a *received_announce(destination_hash, announced_identity, app_data)*
+                        or *received_announce(destination_hash, announced_identity, app_data, announce_packet_hash)* or
+                        *received_announce(destination_hash, announced_identity, app_data, announce_packet_hash, is_path_response)* callable. Can
+                        optionally have a *receive_path_responses* attribute set to ``True``, to also receive all path responses, in addition to live
+                        announces. See the :ref:`Announce Example<example-announce>` for more info.
+        """
+        with Transport.announce_handler_lock:
+            if hasattr(handler, "received_announce") and callable(handler.received_announce):
+                if hasattr(handler, "aspect_filter"): Transport.announce_handlers.append(handler)
+
+    @staticmethod
+    def deregister_announce_handler(handler):
+        """
+        Deregisters an announce handler.
+
+        :param handler: The announce handler to be deregistered.
+        """
+        with Transport.announce_handler_lock:
+            while handler in Transport.announce_handlers: Transport.announce_handlers.remove(handler)
+
+        Transport.should_collect = True
+
+    #################
+    # Link Handling #
+    #################
+
+    @staticmethod
     def register_link(link):
         RNS.log("Registering link "+str(link), RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
         if link.initiator:
@@ -3148,44 +3213,9 @@ class Transport:
 
             else: RNS.log("Attempted to activate a link that was not in the pending table", RNS.LOG_ERROR)
 
-    @staticmethod
-    def register_announce_handler(handler):
-        """
-        Registers an announce handler.
-
-        :param handler: Must be an object with an *aspect_filter* attribute and a *received_announce(destination_hash, announced_identity, app_data)*
-                        or *received_announce(destination_hash, announced_identity, app_data, announce_packet_hash)* or
-                        *received_announce(destination_hash, announced_identity, app_data, announce_packet_hash, is_path_response)* callable. Can
-                        optionally have a *receive_path_responses* attribute set to ``True``, to also receive all path responses, in addition to live
-                        announces. See the :ref:`Announce Example<example-announce>` for more info.
-        """
-        with Transport.announce_handler_lock:
-            if hasattr(handler, "received_announce") and callable(handler.received_announce):
-                if hasattr(handler, "aspect_filter"): Transport.announce_handlers.append(handler)
-
-    @staticmethod
-    def deregister_announce_handler(handler):
-        """
-        Deregisters an announce handler.
-
-        :param handler: The announce handler to be deregistered.
-        """
-        with Transport.announce_handler_lock:
-            while handler in Transport.announce_handlers: Transport.announce_handlers.remove(handler)
-
-        Transport.should_collect = True
-
-    @staticmethod
-    def interface_hashes():
-        return {interface.get_hash() for interface in Transport.interfaces}
-
-    @staticmethod
-    def find_interface_from_hash(interface_hash):
-        for interface in Transport.interfaces:
-            if interface.get_hash() == interface_hash:
-                return interface
-
-        return None
+    ##################
+    # Cache Handling #
+    ##################
 
     @staticmethod
     def init_announce_cache():
@@ -3358,6 +3388,10 @@ class Transport:
             # query the network.
             RNS.Packet(destination, packet_hash, context = RNS.Packet.CACHE_REQUEST).send()
 
+    ###################
+    # Various Helpers #
+    ###################
+
     @staticmethod
     def has_path(destination_hash):
         """
@@ -3489,6 +3523,10 @@ class Transport:
 
         # except Exception as e: RNS.log(f"Error while getting link distribution stats: {e}", RNS.LOG_DEBUG)
 
+    #################
+    # Path Handling #
+    #################
+
     @staticmethod
     def expire_path(destination_hash):
         with Transport.path_table_lock:
@@ -3569,7 +3607,7 @@ class Transport:
         return Transport.has_path(destination_hash)
 
     @staticmethod
-    def request_path(destination_hash, on_interface=None, tag=None, recursive=False):
+    def request_path(destination_hash, on_interface=None, tag=None, recursive=False, stamped_ext=None):
         """
         Requests a path to the destination from the network. If
         another reachable peer on the network knows a path, it
@@ -3577,16 +3615,33 @@ class Transport:
 
         :param destination_hash: A destination hash as *bytes*.
         :param on_interface: If specified, the path request will only be sent on this interface. In normal use, Reticulum handles this automatically, and this parameter should not be used.
+        :param stamped_ext: Internal flag used by :ref:`RNS.Transport<api-transport>`. Ignore.
         """
         if on_interface and recursive and on_interface.should_egress_limit_pr():
             RNS.log(f"Blocking recursive path request on {on_interface} due to active egress limiting", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
             return
 
+        # From version 1.6.0, path requests always carry transport ID
         if tag == None: request_tag = RNS.Identity.get_random_hash()
-        else:           request_tag = tag
+        else:           request_tag = tag[:RNS.Identity.TRUNCATED_HASHLENGTH//8]
+        path_request_data = destination_hash+Transport.identity.hash+request_tag
 
-        if RNS.Reticulum.transport_enabled(): path_request_data = destination_hash+Transport.identity.hash+request_tag
-        else:                                 path_request_data = destination_hash+request_tag
+        # If a stamped extension is ready, include it
+        if stamped_ext != None: path_request_data += stamped_ext
+
+        # Otherwise, check if we need to include a PR stamp
+        elif RNS.Transport.STAMP_PRS:
+            material = Transport.pr_stamp_material(destination_hash, request_tag)
+            with Transport.pr_stamp_cache_lock: stamp = Transport.pr_stamp_cache.get(material, None)
+
+            # No cached stamp available, start generating
+            if not stamp:
+                with Transport.path_requests_lock: Transport.path_requests[destination_hash] = time.time()
+                Transport.enqueue_stamped_pr(destination_hash, on_interface=on_interface, tag=request_tag, recursive=recursive)
+                return
+
+            # Cached stamp available, append for immediate dispatch
+            else: path_request_data += bytes([RNS.Identity.EXTPAYLOADMARKER, 0x00])+stamp
 
         path_request_dst = RNS.Destination(None, RNS.Destination.OUT, RNS.Destination.PLAIN, Transport.APP_NAME, "path", "request")
         packet = RNS.Packet(path_request_dst, path_request_data, packet_type = RNS.Packet.DATA, transport_type = RNS.Transport.BROADCAST, header_type = RNS.Packet.HEADER_1, attached_interface = on_interface)
@@ -3615,102 +3670,29 @@ class Transport:
         packet.send()
 
     @staticmethod
-    def remote_status_handler(path, data, request_id, link_id, remote_identity, requested_at):
-        if remote_identity != None:
-            response = None
-            try:
-                if isinstance(data, list) and len(data) > 0:
-                    response = []
-                    response.append(Transport.owner.get_interface_stats())
-                    if data[0] == True: response.append(Transport.owner.get_link_count())
-
-                    if len(data) >= 2:
-                        if data[1] == True: response.append(Transport.owner.get_profiling_results())
-
-                    return response
-
-            except Exception as e:
-                RNS.log("An error occurred while processing remote status request from "+str(remote_identity), RNS.LOG_ERROR)
-                RNS.log("The contained exception was: "+str(e), RNS.LOG_ERROR)
-
-            return None
-
-    @staticmethod
-    def remote_path_handler(path, data, request_id, link_id, remote_identity, requested_at):
-        if remote_identity != None:
-            response = None
-            try:
-                if isinstance(data, list) and len(data) > 0:
-                    command = data[0]
-                    destination_hash = None
-                    max_hops = None
-                    if len(data) > 1: destination_hash = data[1]
-                    if len(data) > 2: max_hops = data[2]
-
-                    if command == "table":
-                        table = Transport.owner.get_path_table(max_hops=max_hops)
-                        response = []
-                        for path in table:
-                            if destination_hash == None or destination_hash == path["hash"]:
-                                response.append(path)
-
-                    elif command == "rates":
-                        table = Transport.owner.get_rate_table()
-                        response = []
-                        for path in table:
-                            if destination_hash == None or destination_hash == path["hash"]:
-                                response.append(path)
-
-                    return response
-
-            except Exception as e:
-                RNS.log("An error occurred while processing remote status request from "+str(remote_identity), RNS.LOG_ERROR)
-                RNS.log("The contained exception was: "+str(e), RNS.LOG_ERROR)
-
-            return None
-
-    @staticmethod
     def path_request_handler(data, packet):
         try:
-            # If there is at least bytes enough for a destination
-            # hash in the packet, we assume those bytes are the
-            # destination being requested.
-            if len(data) >= RNS.Identity.TRUNCATED_HASHLENGTH//8:
-                destination_hash = data[:RNS.Identity.TRUNCATED_HASHLENGTH//8]
-                # If there is also enough bytes for a transport
-                # instance ID and at least one tag byte, we
-                # assume the next bytes to be the trasport ID
-                # of the requesting transport instance.
-                if len(data) > (RNS.Identity.TRUNCATED_HASHLENGTH//8)*2:
-                    requesting_transport_instance = data[RNS.Identity.TRUNCATED_HASHLENGTH//8:(RNS.Identity.TRUNCATED_HASHLENGTH//8)*2]
-                else:
-                    requesting_transport_instance = None
+            pr = Transport.parse_path_request(data)
+            if pr == None:
+                if len(data) >= RNS.Identity.TRUNCATED_HASHLENGTH//8:
+                    destination_hash = data[:RNS.Identity.TRUNCATED_HASHLENGTH//8]
+                    RNS.log("Ignoring tagless path request for "+RNS.prettyhexrep(destination_hash), RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
+                return
 
-                tag_bytes = None
-                if len(data) > (RNS.Identity.TRUNCATED_HASHLENGTH//8)*2:
-                    tag_bytes = data[RNS.Identity.TRUNCATED_HASHLENGTH//8*2:]
+            destination_hash = pr[0]
+            requesting_tid   = pr[1]
+            tag_bytes        = pr[2]
+            ext_payload      = pr[3]
+            ingress_limited  = packet.traffic_class == Transport.TC_INGRESS_LIMITED
 
-                elif len(data) > (RNS.Identity.TRUNCATED_HASHLENGTH//8):
-                    tag_bytes = data[RNS.Identity.TRUNCATED_HASHLENGTH//8:]
+            Transport.path_request(destination_hash, Transport.from_local_client(packet), packet.receiving_interface,
+                                   requestor_transport_id=requesting_tid, tag=tag_bytes, ingress_limited=ingress_limited,
+                                   stamped_ext=ext_payload)
 
-                if tag_bytes != None:
-                    if len(tag_bytes) > RNS.Identity.TRUNCATED_HASHLENGTH//8:
-                        tag_bytes = tag_bytes[:RNS.Identity.TRUNCATED_HASHLENGTH//8]
-
-                    unique_tag = destination_hash+tag_bytes
-
-                    Transport.path_request(destination_hash,
-                                           Transport.from_local_client(packet),
-                                           packet.receiving_interface,
-                                           requestor_transport_id = requesting_transport_instance,
-                                           tag=tag_bytes,
-                                           ingress_limited=packet.traffic_class == Transport.TC_INGRESS_LIMITED)
-
-                else: RNS.log("Ignoring tagless path request for "+RNS.prettyhexrep(destination_hash), RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
         except Exception as e: RNS.log(f"Error while handling path request. The contained exception was: {e}", RNS.LOG_ERROR)
 
     @staticmethod
-    def path_request(destination_hash, is_from_local_client, attached_interface, requestor_transport_id=None, tag=None, ingress_limited=False):
+    def path_request(destination_hash, is_from_local_client, attached_interface, requestor_transport_id=None, tag=None, ingress_limited=False, stamped_ext=None):
         should_search_for_unknown = False
         should_ingress_limit      = False
         search_mode_filter        = None
@@ -3816,11 +3798,10 @@ class Transport:
         elif is_from_local_client:
             # Forward path request on all interfaces
             # except the local client
-            RNS.log("Forwarding path request from local client for "+RNS.prettyhexrep(destination_hash)+interface_str+" to all other interfaces", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
-            request_tag = RNS.Identity.get_random_hash()
+            RNS.log(f"Forwarding path request from local client for {RNS.prettyhexrep(destination_hash)+interface_str} to all other interfaces", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
             for interface in Transport.interfaces:
                 if not interface == attached_interface:
-                    Transport.request_path(destination_hash, interface, tag=request_tag)
+                    Transport.request_path(destination_hash, interface, tag=tag, stamped_ext=stamped_ext)
 
         elif should_search_for_unknown:
             with Transport.discovery_pr_lock:
@@ -3871,18 +3852,19 @@ class Transport:
                         if interface.should_egress_limit_pr():
                             RNS.log(f"Not sending recursive path request on {interface} due to active egress limiting", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
                         else:
+                            if stamped_ext == None and RNS.Transport.STAMPS_ENFORCED:
+                                RNS.log(f"Reached rebroadcast decision for unstamped path request for {RNS.prettyhexrep(destination_hash)} under stamp enforcement. This should not happen.", RNS.LOG_CRITICAL)
+                                break
+
                             # Use the previously extracted tag from this path request
                             # on the new path requests as well, to avoid potential loops
-                            Transport.request_path(destination_hash, on_interface=interface, tag=tag, recursive=True)
+                            Transport.request_path(destination_hash, on_interface=interface, tag=tag, recursive=True, stamped_ext=stamped_ext)
 
         elif not is_from_local_client and len(Transport.local_client_interfaces) > 0:
-            # Forward the path request on all local
-            # client interfaces
+            # Forward the path request on all local client interfaces
             RNS.log(f"Forwarding path request for {RNS.prettyhexrep(destination_hash)}{interface_str} to local clients", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
-            request_tag = RNS.Identity.get_random_hash()
             for interface in Transport.local_client_interfaces:
-                Transport.request_path(destination_hash, on_interface=interface, tag=request_tag)
-
+                Transport.request_path(destination_hash, on_interface=interface, tag=tag, stamped_ext=stamped_ext)
         else:
             RNS.log(f"Ignoring path request for {RNS.prettyhexrep(destination_hash)}{interface_str}, no path known", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
 
@@ -3891,6 +3873,98 @@ class Transport:
             with Transport.inflight_path_requests_lock:
                 if destination_hash in Transport.inflight_path_requests:
                     Transport.inflight_path_requests.pop(destination_hash)
+
+    ########################
+    # Path Request Helpers #
+    ########################
+
+    PR_LENGTH         = 3*RNS.Identity.TRUNCATED_HASHLENGTH//8
+    PR_STAMPED_LENGTH = PR_LENGTH+RNS.Identity.EXTPAYLOADLENGTH
+    @staticmethod
+    def parse_path_request(data):
+        DL = RNS.Identity.TRUNCATED_HASHLENGTH//8
+        if len(data) < DL: return None
+        destination_hash = data[:DL]
+
+        # Stamped 1.6.0+ format (dst_hash|tid|tag|ext)
+        if len(data) == Transport.PR_STAMPED_LENGTH:
+            return (destination_hash, data[DL:DL*2], data[DL*2:DL*3], data[DL*3:])
+
+        # TODO: Remove after transition
+        # Unstamped, pre 1.6.0 format (dst_hash|tid|tag),
+        # potentially variable tag size, although RNS will
+        # always emit 16-byte tags. Truncates oversized tags.
+        elif len(data) > DL*2:
+            tag = data[DL*2:]
+            if len(tag) > DL: tag = tag[:DL]
+            return (destination_hash, data[DL:DL*2], tag, None)
+
+        # TODO: Remove after transition
+        # Legacy format without transport ID, but with tag
+        elif len(data) > DL: return (destination_hash, None, data[DL:], None)
+
+        # Ancient tagless path request, invalid
+        else: return None
+
+    @staticmethod
+    def pr_stamp_material(destination_hash, tag):
+        return destination_hash+tag
+
+    @staticmethod
+    def validate_pr_stamp(stamp, destination_hash, tag, required_value=None):
+        if required_value == None: required_value = RNS.Transport.PR_COST
+        if not stamp or len(stamp) != RNS.Identity.STAMPLENGTH: return False
+        workblock = stamp_workblock(Transport.pr_stamp_material(destination_hash, tag), expand_rounds=0)
+        return stamp_valid(stamp, required_value, workblock)
+
+    @staticmethod
+    def stamp_path_request(destination_hash, on_interface=None, tag=None, recursive=False):
+        if tag == None: request_tag = RNS.Identity.get_random_hash()
+        else:           request_tag = tag
+
+        material = Transport.pr_stamp_material(destination_hash, request_tag)
+        with Transport.pr_stamp_cache_lock: stamp = Transport.pr_stamp_cache.get(material, None)
+        if not stamp: stamp, value = generate_stamp(material, stamp_cost=RNS.Transport.PR_VALUE, expand_rounds=0, size=RNS.Identity.STAMPLENGTH)
+        if not stamp:
+            RNS.log(f"Could not generate path request stamp for {RNS.prettyhexrep(destination_hash)}, path request emission cancelled", RNS.LOG_WARNING)
+            return
+
+        with Transport.pr_stamp_cache_lock:
+            Transport.pr_stamp_cache[material] = stamp
+            while len(Transport.pr_stamp_cache) > Transport.pr_stamp_cache_max:
+                Transport.pr_stamp_cache.pop(next(iter(Transport.pr_stamp_cache)))
+
+        ext_payload = bytes([RNS.Identity.EXTPAYLOADMARKER, 0x00])+stamp
+        Transport.request_path(destination_hash, on_interface=on_interface, tag=request_tag, recursive=recursive, stamped_ext=ext_payload)
+
+    discovery_pr_tx_throttle = 0.5
+    discovery_pr_tx_lock     = Lock()
+    discovery_pr_handle_lock = Lock()
+    pending_discovery_prs    = deque(maxlen=max_queued_discovery_prs)
+    @staticmethod
+    def handle_disovery_path_requests():
+        if Transport.discovery_pr_handle_lock.locked(): return
+        with Transport.discovery_pr_handle_lock:
+            while len(Transport.pending_discovery_prs):
+                time.sleep(Transport.discovery_pr_tx_throttle)
+                destination_hash = None
+                blocked_if = None
+                with Transport.discovery_pr_tx_lock:
+                    entry = Transport.pending_discovery_prs.popleft()
+                    destination_hash = entry[0]
+                    blocked_if = entry[1]
+
+                if destination_hash:
+                    if blocked_if == None: Transport.request_path(destination_hash)
+                    else:
+                        request_tag = RNS.Identity.get_random_hash()
+                        for interface in Transport.interfaces:
+                            if interface != blocked_if: Transport.request_path(destination_hash, on_interface=interface, tag=request_tag)
+                            else: pass
+
+    #################################
+    # Interface helpers & utilities #
+    #################################
 
     @staticmethod
     def from_local_client(packet):
@@ -3914,6 +3988,18 @@ class Transport:
     def interface_to_shared_instance(interface):
         if hasattr(interface, "is_connected_to_shared_instance"): return True
         else:                                                     return False
+
+    @staticmethod
+    def interface_hashes():
+        return {interface.get_hash() for interface in Transport.interfaces}
+
+    @staticmethod
+    def find_interface_from_hash(interface_hash):
+        for interface in Transport.interfaces:
+            if interface.get_hash() == interface_hash:
+                return interface
+
+        return None
 
     @staticmethod
     def detach_interfaces():
@@ -4002,6 +4088,10 @@ class Transport:
                 if registered_destination.type == RNS.Destination.SINGLE:
                     registered_destination.announce(path_response=True)
 
+    ####################
+    # Announce Helpers #
+    ####################
+
     @staticmethod
     def drop_announce_queues():
         for interface in Transport.interfaces:
@@ -4034,6 +4124,10 @@ class Transport:
         announce_emitted = Transport.timebase_from_random_blob(random_blob)
 
         return announce_emitted
+
+    #####################
+    # State Persistence #
+    #####################
 
     @staticmethod
     def save_packet_hashlist(background=False):
@@ -4258,19 +4352,9 @@ class Transport:
             Transport.save_path_table(background=background)
             Transport.save_tunnel_table(background=background)
 
-    @staticmethod
-    def void_queues():
-        Transport.held_announces = {}
-        Transport.receipts = []
-        Transport.reverse_table = {}
-
-    @staticmethod
-    def exit_handler():
-        Transport._should_run = False
-        Transport.void_queues()
-        if not Transport.owner.is_connected_to_shared_instance:
-            Transport.persist_data()
-            if Transport.announce_cache != None: Transport.announce_cache.flush()
+    ########################
+    # Blackhole Management #
+    ########################
 
     @staticmethod
     def blackhole_identity(identity_hash, until=None, reason=None):
@@ -4407,7 +4491,86 @@ class Transport:
             RNS.log(f"Error while persisting blackhole list: {e}", RNS.LOG_ERROR)
             RNS.trace_exception(e)
 
-# Memory management
+    ###################
+    # Various Helpers #
+    ###################
+
+    @staticmethod
+    def void_queues():
+        Transport.held_announces = {}
+        Transport.receipts = []
+        Transport.reverse_table = {}
+
+    @staticmethod
+    def exit_handler():
+        Transport._should_run = False
+        Transport.void_queues()
+        if not Transport.owner.is_connected_to_shared_instance:
+            Transport.persist_data()
+            if Transport.announce_cache != None: Transport.announce_cache.flush()
+
+    #####################
+    # Remote Management #
+    #####################
+
+    @staticmethod
+    def remote_status_handler(path, data, request_id, link_id, remote_identity, requested_at):
+        if remote_identity != None:
+            response = None
+            try:
+                if isinstance(data, list) and len(data) > 0:
+                    response = []
+                    response.append(Transport.owner.get_interface_stats())
+                    if data[0] == True: response.append(Transport.owner.get_link_count())
+
+                    if len(data) >= 2:
+                        if data[1] == True: response.append(Transport.owner.get_profiling_results())
+
+                    return response
+
+            except Exception as e:
+                RNS.log("An error occurred while processing remote status request from "+str(remote_identity), RNS.LOG_ERROR)
+                RNS.log("The contained exception was: "+str(e), RNS.LOG_ERROR)
+
+            return None
+
+    @staticmethod
+    def remote_path_handler(path, data, request_id, link_id, remote_identity, requested_at):
+        if remote_identity != None:
+            response = None
+            try:
+                if isinstance(data, list) and len(data) > 0:
+                    command = data[0]
+                    destination_hash = None
+                    max_hops = None
+                    if len(data) > 1: destination_hash = data[1]
+                    if len(data) > 2: max_hops = data[2]
+
+                    if command == "table":
+                        table = Transport.owner.get_path_table(max_hops=max_hops)
+                        response = []
+                        for path in table:
+                            if destination_hash == None or destination_hash == path["hash"]:
+                                response.append(path)
+
+                    elif command == "rates":
+                        table = Transport.owner.get_rate_table()
+                        response = []
+                        for path in table:
+                            if destination_hash == None or destination_hash == path["hash"]:
+                                response.append(path)
+
+                    return response
+
+            except Exception as e:
+                RNS.log("An error occurred while processing remote status request from "+str(remote_identity), RNS.LOG_ERROR)
+                RNS.log("The contained exception was: "+str(e), RNS.LOG_ERROR)
+
+            return None
+
+#####################
+# Memory Management #
+#####################
 
 MEM_TRIM_FLOOR = 60
 _trim_impl     = None
@@ -4492,7 +4655,9 @@ def _resolve_trim():
     RNS.log(f"No working memory trim mechanism on this platform, memory management will be sub-optimal", RNS.LOG_WARNING)
     return None
 
-# Table entry indices
+#######################
+# Table entry indices #
+#######################
 
 # Transport.path_table entry indices
 IDX_PT_TIMESTAMP = 0
