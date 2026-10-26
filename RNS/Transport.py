@@ -192,10 +192,10 @@ class Transport:
     STAMP_DESTINATIONS          = False        # Whether to stamp destination announces emitted from this instance
     STAMP_PRS                   = False        # Whether to stamp path requests emitted from this instance
     STAMP_COST_CAP              = 100          # Global hard cap on stamp cost to ensure search-space viability at 14-byte stamp sizes
-    DESTINATION_COST            = 18           # Default required announce cost if no specifics configured or determined
-    DESTINATION_VALUE           = 18           # Default target stamp value for emitted announces
-    PR_COST                     = 18           # Default required path request cost if no specifics configured or determined
-    PR_VALUE                    = 18           # Default target stamp value for emitted path requests
+    DESTINATION_COST            = 20           # Default required announce cost if no specifics configured or determined
+    DESTINATION_VALUE           = 20           # Default target stamp value for emitted announces
+    PR_COST                     = 19           # Default required path request cost if no specifics configured or determined
+    PR_VALUE                    = 19           # Default target stamp value for emitted path requests
 
     STAMPER_PR_QUEUE_LENGTH     = 32           # TODO: Provisional, wire to config handling
     STAMPER_AN_QUEUE_LENGTH     = 32           # TODO: Provisional, wire to config handling
