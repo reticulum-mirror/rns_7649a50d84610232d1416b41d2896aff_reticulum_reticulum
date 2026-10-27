@@ -46,6 +46,11 @@ USE_WORKER_MANAGER          = False
 POOLING_THRESHOLD_COST      = 15
 STOP_CHECK_INTERVAL         = 64
 
+KEYSTAMP_POOLING_THRESHOLD  = 12
+
+MODE_STAMP                  = 0x00
+MODE_KEYSTAMP               = 0x01
+
 active_jobs = {}
 
 if sys.version_info[0] >= 3 and sys.version_info[1] >= 14:
@@ -89,19 +94,80 @@ def stamp_workblock(material, expand_rounds=WORKBLOCK_EXPAND_ROUNDS, no_expand=F
     return workblock
 
 def stamp_value(workblock, stamp):
+    if not workblock: workblock = b""
     material = RNS.Identity.full_hash(workblock+stamp)
     return 256 - int.from_bytes(material, byteorder="big").bit_length()
 
 def stamp_valid(stamp, target_cost, workblock):
+    if not workblock: workblock = b""
     target = 0b1 << 256-target_cost
     result = RNS.Identity.full_hash(workblock+stamp)
     if int.from_bytes(result, byteorder="big") > target: return False
     else: return True
 
+# Synthetic stop check function used where
+# worker mechanism provides no support for
+# semaphore-based cancellation.
+def _never(): return False
+
+# The hash-mode loop primitive, shared
+# between platform variants.
+def _loop_hash(workblock, target, size, stop_check, progress=None, max_rounds=0, fh=None):
+    if fh == None: fh = RNS.Identity.full_hash
+    urandom = os.urandom
+    rounds  = 0
+    found   = False
+    pstamp  = urandom(size)
+    c       = 0
+
+    while True:
+        c += 1
+        if c >= STOP_CHECK_INTERVAL:
+            c = 0
+            if stop_check(): break
+
+        if int.from_bytes(fh(workblock+pstamp), byteorder="big") <= target:
+            found = True; break
+        pstamp = urandom(size); rounds += 1
+
+        if progress != None and rounds % 250000 == 0: progress(rounds)
+        if max_rounds != 0 and rounds >= max_rounds: break
+
+    return pstamp, rounds, found
+
+# The key-mode loop primitive, shared
+# between platform variants.
+def _loop_key(material, target, stop_check, max_rounds=0):
+    fh       = RNS.Identity.full_hash
+    generate = RNS.Cryptography.X25519PrivateKey.generate
+    rounds   = 0
+    found    = False
+    keypair  = None
+
+    while True:
+        if stop_check(): break
+
+        key       = generate()
+        pub_bytes = key.public_key().public_bytes()
+        if int.from_bytes(fh(material+pub_bytes), byteorder="big") <= target:
+            keypair = (key.private_bytes(), pub_bytes)
+            found   = True; break
+        rounds += 1
+
+        if max_rounds != 0 and rounds >= max_rounds: break
+
+    return keypair, rounds, found
+
+# Generates a normal, detached, hash-based stamp for any
+# bytes material (message_id), which is usually a hash
+# of some input material, but can be any sequence of bytes.
 def generate_stamp(message_id, stamp_cost, expand_rounds=WORKBLOCK_EXPAND_ROUNDS, no_expand=False, size=STAMP_SIZE):
+    stamp_cost = int(stamp_cost)
     if stamp_cost < 0 or stamp_cost > RNS.Transport.STAMP_COST_CAP: raise ValueError("Invalid stamp cost, cannot generate")
-    RNS.log(f"Generating stamp with cost {stamp_cost} for <{RNS.hexrep(message_id[:16], delimit=False)}{'…' if len(message_id) > 16 else ''}>", RNS.LOG_DEBUG)
     workblock = stamp_workblock(message_id, expand_rounds=expand_rounds, no_expand=no_expand)
+
+    if message_id in active_jobs: raise RuntimeError(f"Duplicate stamp generation job for {RNS.prettyhexrep(message_id)}")
+    RNS.log(f"Generating stamp with cost {stamp_cost} for <{RNS.hexrep(message_id[:16], delimit=False)}{'…' if len(message_id) > 16 else ''}>", RNS.LOG_DEBUG)
     
     start_time = time.time()
     stamp = None
@@ -125,6 +191,68 @@ def generate_stamp(message_id, stamp_cost, expand_rounds=WORKBLOCK_EXPAND_ROUNDS
 
     return stamp, value
 
+# Generates a new, internally stamped X25519 keypair. The
+# public key carries the stamp value itself, so no detached
+# stamp is created. Unlike the detached stamp generator, this
+# method returns the private+public X25519 keypair, and the
+# private key can be loaded normally to create a full, stamped
+# Reticulum Identity. The stamp value is verifiable to anyone
+# knowing the public key (and the optional input material).
+#
+# For a transparently verifiable stamped identity, you should
+# generally always use the provided `RNS.Identity(value=n)`
+# primitive, and not generate raw stamped keys manually. Using
+# the API primitive correctly binds the full identity keyset
+# together with the stamped portion of the key. Situations do
+# exist where you may want a bare, no-material stamped key,
+# but this should be considered hazardous materials territory!
+#
+# For custom stamped keys, where the stamped key is intended
+# to be tied to a specific domain, for example a link request
+# or other one-time use, the `material` argument must be the
+# relevant uniquely identifying nonce of such use that the
+# stamped key is bound to.
+#
+# Key stamp validation uses the normal validation methods,
+# simply provide the public key bytes directly *as* the stamp,
+# and any domain material as the workblock, for example:
+#
+# - stamp_valid(public_key_bytes, required_cost, material)
+# - stamp_value(material, public_key_bytes)
+#
+# WARNING: Never attempt to use this for Ed25519 *signature* key
+# creation, is NOT a valid approach. The keypairs emitted by
+# this function must ONLY be used as X25519 keys.
+def generate_stamped_key(material, stamp_cost):
+    if material == None: material = b""
+    stamp_cost = int(stamp_cost)
+    if material in active_jobs: raise RuntimeError(f"Duplicate stamped key generation job for {RNS.prettyhexrep(material)}")
+    if stamp_cost < 0 or stamp_cost > RNS.Transport.STAMP_COST_CAP: raise ValueError("Invalid stamp cost, cannot generate")
+    for_str = f" for <{RNS.hexrep(material[:16], delimit=False)}{'…' if len(material) > 16 else ''}>" if material else ""
+    RNS.log(f"Generating stamped key with cost {stamp_cost}{for_str}", RNS.LOG_DEBUG)
+
+    start_time = time.time()
+    keypair    = None
+    rounds     = 0
+    value      = 0
+
+    if RNS.vendor.platformutils.is_windows() or RNS.vendor.platformutils.is_darwin():
+        RNS.log(f"Multi-core stamp generation on this platform is not supported, work limited to single CPU core.", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+
+    if RNS.vendor.platformutils.is_windows() or RNS.vendor.platformutils.is_darwin(): keypair, rounds = job_simple(stamp_cost, material, material, 0, MODE_KEYSTAMP)
+    elif RNS.vendor.platformutils.is_android(): keypair, rounds = job_android(stamp_cost, material, material, 0, MODE_KEYSTAMP)
+    else:
+        if USE_WORKER_MANAGER: keypair, rounds = job_linux_managed(stamp_cost, material, material, 0, MODE_KEYSTAMP) if stamp_cost >= KEYSTAMP_POOLING_THRESHOLD else job_simple(stamp_cost, material, material, 0, MODE_KEYSTAMP)
+        else:                  keypair, rounds = job_linux(stamp_cost, material, material, 0, MODE_KEYSTAMP) if stamp_cost >= KEYSTAMP_POOLING_THRESHOLD else job_simple(stamp_cost, material, material, 0, MODE_KEYSTAMP)
+
+    duration = max(time.time()-start_time, 1E-6)
+    speed = rounds/duration
+    if keypair != None: value = stamp_value(material, keypair[1])
+
+    RNS.log(f"Stamped key with value {value} generated in {RNS.prettyshorttime(duration)}, {rounds} rounds, {RNS.prettysize(speed, suffix='rps')}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+
+    return keypair, value
+
 def cancel_work(message_id):
     if RNS.vendor.platformutils.is_windows() or RNS.vendor.platformutils.is_darwin():
         try:
@@ -146,50 +274,48 @@ def cancel_work(message_id):
 
     else:
         try:
-            if message_id in active_jobs:
-                stop_event = active_jobs[message_id][0]
-                result_queue = active_jobs[message_id][1]
-                stop_event.set()
-                result_queue.put(None)
-                active_jobs.pop(message_id)
+            job_entry = active_jobs.get(message_id, None)
+            if job_entry != None:
+                if type(job_entry) != list: active_jobs[message_id] = True
+                else:
+                    stop_event = job_entry[0]
+                    result_queue = job_entry[1]
+                    stop_event.set()
+                    result_queue.put(None)
+                    active_jobs.pop(message_id)
 
         except Exception as e:
             RNS.log("Error while terminating stamp generation workers: {e}", RNS.LOG_ERROR)
             RNS.trace_exception(e)
 
-def job_simple(stamp_cost, workblock, message_id, size):
+def job_simple(stamp_cost, workblock, message_id, size, mode=MODE_STAMP):
     # A simple, single-process stamp generator.
     # should work on any platform, and is used
     # as a fall-back, in case of limited multi-
     # processing and/or acceleration support.
+    #
+    # In key mode, the workblock argument is
+    # used for the stamp material, and the
+    # size argument is ignored.
 
-    rounds = 0
-    pstamp = os.urandom(size)
     st = time.time()
+    target = 0b1<<256-stamp_cost
 
     active_jobs[message_id] = False
 
-    target = 0b1<<256-stamp_cost
-    c = 0
+    def stop_check(): return active_jobs[message_id]
+    def progress(r):
+        speed = r / max(time.time()-st, 1E-6)
+        RNS.log(f"Stamp generation running. {r} rounds completed so far, {RNS.prettysize(speed, suffix='')} rounds per second", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
 
-    while True:
-        c += 1
-        if c >= STOP_CHECK_INTERVAL:
-            c = 0
-            if active_jobs[message_id]: break
-
-        if int.from_bytes(RNS.Identity.full_hash(workblock+pstamp), byteorder="big") <= target: break
-        pstamp = os.urandom(size); rounds += 1
-
-        if rounds % 250000 == 0:
-            speed = rounds / max(time.time()-st, 1E-6)
-            RNS.log(f"Stamp generation running. {rounds} rounds completed so far, {RNS.prettysize(speed, suffix='')} rounds per second", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+    if mode == MODE_STAMP:    result, rounds, _ = _loop_hash(workblock, target, size, stop_check, progress)
+    else:                     result, rounds, _ = _loop_key(workblock, target, stop_check)
 
     cancelled = (active_jobs[message_id] == True)
     active_jobs.pop(message_id)
-    return (None if cancelled else pstamp), rounds
+    return (None if cancelled else result), rounds
 
-def job_linux_managed(stamp_cost, workblock, message_id, size):
+def job_linux_managed(stamp_cost, workblock, message_id, size, mode=MODE_STAMP):
     ctx = multiprocessing.get_context("fork")
     cores = multiprocessing.cpu_count()
     jobs = cores if cores <= 12 else int(cores/2)
@@ -201,30 +327,22 @@ def job_linux_managed(stamp_cost, workblock, message_id, size):
     with worker_context(ctx, stamp_cost, workblock, message_id) as (stop_event, result_queue, rounds_queue, job_procs):
         RNS.log(f"Starting {jobs} stamp generation workers", RNS.LOG_DEBUG)
         
-        def job(stop_event, sc, wb, pn):
-            rounds = 0; pstamp = os.urandom(size);
-            target = 0b1<<256 - sc; c = 0
+        def job(stop_event, sc, wb, pn, mode):
+            target = 0b1<<256 - sc
 
-            while True:
-                c += 1
-                if c >= STOP_CHECK_INTERVAL:
-                    c = 0
-                    if stop_event.is_set(): break
-
-                m = wb+pstamp
-                if int.from_bytes(RNS.Identity.full_hash(m), byteorder="big") <= target: break
-                pstamp = os.urandom(size); rounds += 1
+            if mode == MODE_STAMP: result, rounds, _ = _loop_hash(wb, target, size, stop_event.is_set)
+            else:                  result, rounds, _ = _loop_key(wb, target, stop_event.is_set)
 
             if not stop_event.is_set():
                 stop_event.set()
-                try: result_queue.put_nowait(pstamp)
+                try: result_queue.put_nowait(result)
                 except: pass
             
             try: rounds_queue.put_nowait(rounds)
             except: pass
 
         for jpn in range(jobs):
-            p = ctx.Process(target=job, args=(stop_event, stamp_cost, workblock, jpn), daemon=True)
+            p = ctx.Process(target=job, args=(stop_event, stamp_cost, workblock, jpn, mode), daemon=True)
             job_procs.append(p)
             p.start()
         
@@ -272,7 +390,7 @@ def job_linux_managed(stamp_cost, workblock, message_id, size):
 
     return stamp, total_rounds
 
-def job_linux(stamp_cost, workblock, message_id, size):
+def job_linux(stamp_cost, workblock, message_id, size, mode=MODE_STAMP):
     allow_kill = True
     stamp = None
     total_rounds = 0
@@ -282,30 +400,22 @@ def job_linux(stamp_cost, workblock, message_id, size):
     result_queue = multiprocessing.Queue(1)
     rounds_queue = multiprocessing.Queue()
 
-    def job(stop_event, pn, sc, wb):
-        rounds = 0; pstamp = os.urandom(size);
-        target = 0b1<<256 - sc; c = 0
+    def job(stop_event, pn, sc, wb, mode):
+        target = 0b1<<256 - sc
 
-        while True:
-            c += 1
-            if c >= STOP_CHECK_INTERVAL:
-                c = 0
-                if stop_event.is_set(): break
-
-            m = wb+pstamp
-            if int.from_bytes(RNS.Identity.full_hash(m), byteorder="big") <= target: break
-            pstamp = os.urandom(size); rounds += 1
+        if mode == MODE_STAMP: result, rounds, _ = _loop_hash(wb, target, size, stop_event.is_set)
+        else:                  result, rounds, _ = _loop_key(wb, target, stop_event.is_set)
 
         if not stop_event.is_set():
             stop_event.set()
-            result_queue.put(pstamp)
+            result_queue.put(result)
 
         rounds_queue.put(rounds)
     
     job_procs = []
     RNS.log(f"Starting {jobs} stamp generation workers", RNS.LOG_DEBUG)
     for jpn in range(jobs):
-        process = multiprocessing.get_context("fork").Process(target=job, kwargs={"stop_event": stop_event, "pn": jpn, "sc": stamp_cost, "wb": workblock}, daemon=True)
+        process = multiprocessing.get_context("fork").Process(target=job, kwargs={"stop_event": stop_event, "pn": jpn, "sc": stamp_cost, "wb": workblock, "mode": mode}, daemon=True)
         job_procs.append(process)
         process.start()
 
@@ -355,7 +465,7 @@ def job_linux(stamp_cost, workblock, message_id, size):
 
     return stamp, total_rounds
 
-def job_android(stamp_cost, workblock, message_id, size):
+def job_android(stamp_cost, workblock, message_id, size, mode=MODE_STAMP):
     # Semaphore support is flaky to non-existent on
     # Android, so we need to manually dispatch and
     # manage workloads here, while periodically
@@ -381,21 +491,16 @@ def job_android(stamp_cost, workblock, message_id, size):
     wm = multiprocessing.Manager()
     jobs = multiprocessing.cpu_count()
 
-    def job(procnum=None, results_dict=None, wb=None, sc=None, jr=None):
+    def job(procnum=None, results_dict=None, wb=None, sc=None, jr=None, mode=MODE_STAMP):
         try:
-            rounds = 0
-            found_stamp = None
+            found_result = None
             target = 0b1<<256-sc
-            fh = full_hash
 
-            while True:
-                pstamp = os.urandom(size)
-                rounds += 1
-                if int.from_bytes(fh(wb+pstamp), byteorder="big") <= target:
-                    found_stamp = pstamp; break
-                if rounds >= jr: break
+            if mode == MODE_STAMP: result, rounds, found = _loop_hash(wb, target, size, _never, None, jr, full_hash)
+            else:                  result, rounds, found = _loop_key(wb, target, _never, jr)
 
-            results_dict[procnum] = [found_stamp, rounds]
+            if found: found_result = result
+            results_dict[procnum] = [found_result, rounds]
 
         except Exception as e:
             RNS.log(f"Stamp generation worker error: {e}", RNS.LOG_ERROR)
@@ -410,7 +515,7 @@ def job_android(stamp_cost, workblock, message_id, size):
         job_procs = []
         try:
             for pnum in range(jobs):
-                pargs = {"procnum":pnum, "results_dict": results_dict, "wb": workblock, "sc":stamp_cost, "jr":rounds_per_worker}
+                pargs = {"procnum":pnum, "results_dict": results_dict, "wb": workblock, "sc":stamp_cost, "jr":rounds_per_worker, "mode":mode}
                 process = multiprocessing.Process(target=job, kwargs=pargs)
                 job_procs.append(process)
                 process.start()

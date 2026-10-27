@@ -41,7 +41,7 @@ from .vendor import umsgpack as umsgpack
 from RNS.Cryptography import X25519PrivateKey, X25519PublicKey, Ed25519PrivateKey, Ed25519PublicKey
 from RNS.Cryptography import Token
 from RNS.Storage import KnownDestinationsStore
-from RNS.Stamps import stamp_workblock, stamp_valid, stamp_value
+from RNS.Stamps import stamp_workblock, stamp_valid, stamp_value, generate_stamped_key
 
 
 class Identity:
@@ -935,7 +935,7 @@ class Identity:
             RNS.log("Error while saving identity to "+str(path), RNS.LOG_ERROR)
             RNS.log("The contained exception was: "+str(e))
 
-    def __init__(self,create_keys=True):
+    def __init__(self, create_keys=True, value=None):
         # Initialize keys to none
         self.prv           = None
         self.prv_bytes     = None
@@ -951,24 +951,42 @@ class Identity:
         self.hexhash       = None
 
         if create_keys:
-            self.create_keys()
+            self.create_keys(value=value)
 
-    def create_keys(self):
-        self.prv           = X25519PrivateKey.generate()
-        self.prv_bytes     = self.prv.private_bytes()
-
+    def create_keys(self, value=None):
         self.sig_prv       = Ed25519PrivateKey.generate()
+        self.sig_pub       = self.sig_prv.public_key()
         self.sig_prv_bytes = self.sig_prv.private_bytes()
+        self.sig_pub_bytes = self.sig_pub.public_bytes()
+
+        if not value:
+            self.prv       = X25519PrivateKey.generate()
+            self.prv_bytes = self.prv.private_bytes()
+
+        else:
+            stamped_key, v = generate_stamped_key(material=self.sig_pub_bytes, stamp_cost=value)
+            if not stamped_key: raise RuntimeError("Stamped identity key generation failed or was cancelled")
+
+            stamped_prv    = stamped_key[0]
+            self.prv       = X25519PrivateKey.from_private_bytes(stamped_prv)
+            self.prv_bytes = self.prv.private_bytes()
+
+            assert self.prv_bytes == stamped_prv
+            assert self.prv.public_key().public_bytes() == stamped_key[1]
 
         self.pub           = self.prv.public_key()
         self.pub_bytes     = self.pub.public_bytes()
 
-        self.sig_pub       = self.sig_prv.public_key()
-        self.sig_pub_bytes = self.sig_pub.public_bytes()
-
         self.update_hashes()
 
         RNS.log("Identity keys created for "+RNS.prettyhexrep(self.hash), RNS.LOG_VERBOSE)
+
+    def get_value(self):
+        """
+        :returns: The stamp value of this identity as an *integer*
+        """
+        if not self.get_public_key(): return None
+        else:                         return stamp_value(self.sig_pub_bytes, self.pub_bytes)
 
     def get_private_key(self):
         """
