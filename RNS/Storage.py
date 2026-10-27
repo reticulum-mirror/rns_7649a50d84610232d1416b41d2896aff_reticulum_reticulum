@@ -243,6 +243,8 @@ class KnownDestinationsStore:
             self._conn = None
 
     def __create_schema(self):
+        db_version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+
         self._conn.execute("""CREATE TABLE IF NOT EXISTS known_destinations (
             destination_hash BLOB PRIMARY KEY,
             last_heard       REAL NOT NULL,
@@ -252,6 +254,7 @@ class KnownDestinationsStore:
             used             REAL NOT NULL DEFAULT 0,
             stamp            BLOB,
             stamp_value      INTEGER,
+            lr_cost          INTEGER,
             identity_hash    BLOB NOT NULL)""")
 
         self._conn.execute("""CREATE TABLE IF NOT EXISTS ratchets (
@@ -259,14 +262,21 @@ class KnownDestinationsStore:
             ratchet          BLOB NOT NULL,
             received         REAL NOT NULL)""")
 
-        self._conn.execute("PRAGMA user_version = 1")
+        if 0 < db_version < 2:
+            # Version 2 adds the announced link request cost column. On migrated
+            # databases this column trails identity_hash, so all writes must name
+            # their target columns explicitly.
+            self._conn.execute("ALTER TABLE known_destinations ADD COLUMN lr_cost INTEGER")
+
+        self._conn.execute("PRAGMA user_version = 2")
         self._conn.commit()
 
     def __entry_row(self, destination_hash, entry):
         stamp         = entry[5] if len(entry) > 5 else None
         stamp_value   = entry[6] if len(entry) > 6 else 0
+        lr_cost       = entry[7] if len(entry) > 7 else None
         identity_hash = hashlib.sha256(entry[2]).digest()[:self.hash_width]
-        return (destination_hash, entry[0], entry[1], entry[2], entry[3], entry[4], stamp, stamp_value, identity_hash)
+        return (destination_hash, entry[0], entry[1], entry[2], entry[3], entry[4], stamp, stamp_value, lr_cost, identity_hash)
 
     # Caller must hold Identity.known_destinations_lock
     def mark_dirty(self, destination_hash):
@@ -321,7 +331,7 @@ class KnownDestinationsStore:
 
             try:
                 self._conn.execute("BEGIN")
-                for i in range(0, len(rows), 4096):               self._conn.executemany("INSERT INTO known_destinations VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(destination_hash) DO UPDATE SET last_heard=excluded.last_heard, packet_hash=excluded.packet_hash, public_key=excluded.public_key, app_data=excluded.app_data, used=excluded.used, stamp=excluded.stamp, stamp_value=excluded.stamp_value, identity_hash=excluded.identity_hash", rows[i:i+4096])
+                for i in range(0, len(rows), 4096):               self._conn.executemany("INSERT INTO known_destinations (destination_hash, last_heard, packet_hash, public_key, app_data, used, stamp, stamp_value, lr_cost, identity_hash) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(destination_hash) DO UPDATE SET last_heard=excluded.last_heard, packet_hash=excluded.packet_hash, public_key=excluded.public_key, app_data=excluded.app_data, used=excluded.used, stamp=excluded.stamp, stamp_value=excluded.stamp_value, lr_cost=excluded.lr_cost, identity_hash=excluded.identity_hash", rows[i:i+4096])
                 for i in range(0, len(removables), 4096):         self._conn.executemany("DELETE FROM known_destinations WHERE destination_hash=?", removables[i:i+4096])
                 for i in range(0, len(ratchet_rows), 4096):       self._conn.executemany("INSERT INTO ratchets VALUES (?,?,?) ON CONFLICT(destination_hash) DO UPDATE SET ratchet=excluded.ratchet, received=excluded.received", ratchet_rows[i:i+4096])
                 for i in range(0, len(ratchet_removables), 4096): self._conn.executemany("DELETE FROM ratchets WHERE destination_hash=?", ratchet_removables[i:i+4096])
@@ -340,11 +350,11 @@ class KnownDestinationsStore:
             return len(rows) + len(removables) + len(ratchet_rows) + len(ratchet_removables)
 
     def load_all(self):
-        cursor = self._conn.execute("SELECT destination_hash, last_heard, packet_hash, public_key, app_data, used, stamp, stamp_value FROM known_destinations")
+        cursor = self._conn.execute("SELECT destination_hash, last_heard, packet_hash, public_key, app_data, used, stamp, stamp_value, lr_cost FROM known_destinations")
         while True:
             rows = cursor.fetchmany(4096)
             if not rows: break
-            for row in rows: yield row[0], [row[1], row[2], row[3], row[4], row[5], row[6], row[7]]
+            for row in rows: yield row[0], [row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8]]
 
     # Caller must hold Identity.known_destinations_lock.
     def remember_ratchet(self, destination_hash, ratchet, now):
@@ -452,12 +462,12 @@ class KnownDestinationsStore:
         for destination_hash, entry in legacy.items():
             if len(entry) < 5: continue
             entry = list(entry)
-            while len(entry) < 7: entry.append(None if len(entry) == 5 else 0)
+            while len(entry) < 8: entry.append(None if len(entry) in (5, 7) else 0)
             if entry[0] == None or entry[0] <= 0: entry[0] = now
             rows.append(self.__entry_row(destination_hash, entry))
 
         self._conn.execute("BEGIN")
-        for i in range(0, len(rows), 4096): self._conn.executemany("INSERT OR REPLACE INTO known_destinations VALUES (?,?,?,?,?,?,?,?,?)", rows[i:i+4096])
+        for i in range(0, len(rows), 4096): self._conn.executemany("INSERT OR REPLACE INTO known_destinations (destination_hash, last_heard, packet_hash, public_key, app_data, used, stamp, stamp_value, lr_cost, identity_hash) VALUES (?,?,?,?,?,?,?,?,?,?)", rows[i:i+4096])
         self._conn.commit()
 
         return len(rows)

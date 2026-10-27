@@ -84,7 +84,8 @@ class Identity:
     SIGLENGTH                 = KEYSIZE     # In bits
     STAMPLENGTH               = 14          # In bytes
     EXTHEADERLENGTH           = 2           # In bytes
-    EXTPAYLOADLENGTH          = EXTHEADERLENGTH+STAMPLENGTH
+    LRCOSTLENGTH              = 1           # In bytes
+    EXTPAYLOADLENGTH          = EXTHEADERLENGTH+STAMPLENGTH+LRCOSTLENGTH
     EXTPAYLOADMARKER          = 0xC1 # Never used at msgpack object boundaries
 
     TRUNCATED_HASHLENGTH      = RNS.Reticulum.TRUNCATED_HASHLENGTH
@@ -104,13 +105,13 @@ class Identity:
     known_destinations_lock = threading.Lock()
 
     @staticmethod
-    def remember(packet_hash, destination_hash, public_key, app_data=None, stamp=None, stamp_value=0):
+    def remember(packet_hash, destination_hash, public_key, app_data=None, stamp=None, stamp_value=0, lr_cost=None):
         if stamp_value == None: stamp_value = 0
         if len(public_key) != Identity.KEYSIZE//8: raise TypeError(f"Can't remember {RNS.prettyhexrep(destination_hash)}, the public key size of {len(public_key)} is not valid.", RNS.LOG_ERROR)
         else:
             with Identity.known_destinations_lock:
                 if not destination_hash in Identity.known_destinations:
-                    Identity.known_destinations[destination_hash] = [time.time(), packet_hash, public_key, app_data, 0, stamp, stamp_value]
+                    Identity.known_destinations[destination_hash] = [time.time(), packet_hash, public_key, app_data, 0, stamp, stamp_value, lr_cost]
                 else:
                     entry = Identity.known_destinations[destination_hash]
                     entry[0] = time.time()
@@ -119,6 +120,7 @@ class Identity:
                     entry[3] = app_data
                     entry[5] = stamp
                     entry[6] = stamp_value
+                    entry[7] = lr_cost
 
                 Identity._kd_mark_dirty(destination_hash)
 
@@ -194,6 +196,18 @@ class Identity:
         known_destination = Identity.known_destinations.get(destination_hash)
         if not known_destination: return None
         else:                     return known_destination[6]
+
+    @staticmethod
+    def recall_link_cost(destination_hash):
+        """
+        Recall the link request stamp cost announced by a destination.
+
+        :param destination_hash: Destination hash as *bytes*.
+        :returns: *Integer*, or *None* if the destination is unknown or has not announced a cost.
+        """
+        known_destination = Identity.known_destinations.get(destination_hash)
+        if not known_destination: return None
+        else:                     return known_destination[7]
 
     @staticmethod
     def save_known_destinations(background=False, recombine=False):
@@ -318,7 +332,11 @@ class Identity:
                     if len(known_destination) == RNS.Reticulum.TRUNCATED_HASHLENGTH//8:
                         if len(loaded_known_destinations[known_destination]) < 5:
                             e = loaded_known_destinations[known_destination]
-                            loaded_known_destinations[known_destination] = [e[0], e[1], e[2], e[3], 0]
+                            loaded_known_destinations[known_destination] = [e[0], e[1], e[2], e[3], 0, None, 0, None]
+                        elif len(loaded_known_destinations[known_destination]) < 8:
+                            e = loaded_known_destinations[known_destination]
+                            while len(e) < 8: e.append(None if len(e) in (5, 7) else 0)
+                            loaded_known_destinations[known_destination] = e
 
                         with Identity.known_destinations_lock:
                             Identity.known_destinations[known_destination] = loaded_known_destinations[known_destination]
@@ -699,11 +717,26 @@ class Identity:
                 dst_stamped     = None
                 dst_value       = None
                 stamp_validated = None
+                dst_lr_cost     = None
                 if RNS.Transport.STAMPS_ENABLED and app_data and len(app_data) >= Identity.EXTPAYLOADLENGTH:
                     ext_payload = app_data[-Identity.EXTPAYLOADLENGTH:]
                     ext_header  = ext_payload[:Identity.EXTHEADERLENGTH]
                     ext_flags   = ext_header[1] # Reserved for future extensions
-                    if not ext_header[0] == Identity.EXTPAYLOADMARKER: dst_stamped = False
+                    ext_anchor  = ext_payload[-1]
+
+                    # The trailing anchor byte carries the announced link request stamp
+                    # cost in its 7 least significant bits, and an extension marker in
+                    # its most significant bit. If the extension marker is set, the
+                    # ext_payload is of a newer and potentially longer format, parsed
+                    # through versioned logic not yet implemented in this version, and
+                    # must not be interpreted here. As long as announced costs cannot
+                    # exceed STAMP_COST_CAP, valid announce ext_payloads will always
+                    # present with the extension marker cleared.
+                    ext_extended = (ext_anchor & 0x80) != 0
+                    ext_lr_cost  = ext_anchor & 0x7F
+                    known_format = (not ext_extended) and (ext_lr_cost <= RNS.Transport.STAMP_COST_CAP)
+
+                    if (not ext_header[0] == Identity.EXTPAYLOADMARKER) or (not known_format): dst_stamped = False
                     else:
                         # RNS.log(f"Checking potential stamp in announce with app_data len {len(app_data)} for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) # TODO: Remove
                         dst_stamped = True
@@ -718,6 +751,7 @@ class Identity:
                                 if not len(app_data): app_data = None
                                 stamp_validated = True
                                 dst_value       = stamp_value(wb, stamp)
+                                dst_lr_cost     = ext_lr_cost
 
                         except Exception as e: RNS.log(f"Announce stamp parsing failed: {e}", RNS.LOG_ERROR)
 
@@ -767,7 +801,7 @@ class Identity:
                                 return False
 
                         RNS.Identity.remember(packet.get_hash(), destination_hash, public_key,
-                                              app_data=app_data, stamp=stamp, stamp_value=dst_value)
+                                              app_data=app_data, stamp=stamp, stamp_value=dst_value, lr_cost=dst_lr_cost)
 
                         del announced_identity
 

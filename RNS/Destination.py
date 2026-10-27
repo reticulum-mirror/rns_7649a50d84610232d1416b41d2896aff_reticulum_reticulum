@@ -162,6 +162,7 @@ class Destination:
         self.proof_strategy = Destination.PROVE_NONE
         self.stamp = None
         self.stamp_value = None
+        self.link_cost = None
         self.ratchets = None
         self.ratchets_path = None
         self.ratchet_interval = Destination.RATCHET_INTERVAL
@@ -329,7 +330,7 @@ class Destination:
                         store_destination_stamp(self.hash, stamp, stamp_value)
                         RNS.log(f"Generated and persisted stamp with value {self.stamp_value} for {self}", RNS.LOG_DEBUG)
 
-                ext_payload = bytes([RNS.Identity.EXTPAYLOADMARKER, self.get_ext_flags()])+self.stamp
+                ext_payload = bytes([RNS.Identity.EXTPAYLOADMARKER, self.get_ext_flags()])+self.stamp+bytes([self.get_link_cost()])
                 if app_data == None: app_data = ext_payload
                 else:                app_data = app_data+ext_payload
             
@@ -360,6 +361,18 @@ class Destination:
 
     def get_ext_flags(self):
         return 0x00
+
+    def get_link_cost(self):
+        """
+        Returns the link request stamp cost to be announced for this
+        destination, as an integer. If no destination-specific cost has
+        been set, the default link request cost is returned.
+
+        :returns: The announced link request cost as an *integer*.
+        """
+        cost = self.link_cost
+        if cost == None: cost = RNS.Transport.LR_COST
+        return max(0, min(int(cost), RNS.Transport.STAMP_COST_CAP))
 
     def accepts_links(self, accepts = None):
         """

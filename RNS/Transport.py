@@ -197,6 +197,7 @@ class Transport:
     DESTINATION_VALUE           = 23           # Default target stamp value for emitted announces
     PR_COST                     = 19           # Default required path request cost if no specifics configured or determined
     PR_VALUE                    = 19           # Default target stamp value for emitted path requests
+    LR_COST                     = 19           # Default required link request cost if not explicitly announced or configured
 
     STAMPER_PR_QUEUE_LENGTH     = 32           # TODO: Provisional, wire to config handling
     STAMPER_AN_QUEUE_LENGTH     = 32           # TODO: Provisional, wire to config handling
@@ -2062,7 +2063,7 @@ class Transport:
                         stamp_ok = False
                         if ext_payload != None:
                             if ext_payload[0] == RNS.Identity.EXTPAYLOADMARKER:
-                                stamp = ext_payload[RNS.Identity.EXTHEADERLENGTH:]
+                                stamp = ext_payload[Transport.PR_EXT_HEADERLENGTH:]
                                 stamp_ok = Transport.validate_pr_stamp(stamp, destination_hash, tag_bytes)
                                 if not stamp_ok:
                                     if ext_payload[1] == 0xFF: RNS.log(f"Unstamped relayed path request from stamp-aware node for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Remove this transitory diagnostics check once enforcement is enabled
@@ -2077,7 +2078,7 @@ class Transport:
                         else: # TODO: Remove
                             if RNS.sl(RNS.LOG_DEBUG): # TODO: Remove
                                 workblock = stamp_workblock(Transport.pr_stamp_material(destination_hash, tag_bytes), expand_rounds=0) # TODO: Remove
-                                dval = stamp_value(workblock, ext_payload[RNS.Identity.EXTHEADERLENGTH:]) # TODO: Remove
+                                dval = stamp_value(workblock, ext_payload[Transport.PR_EXT_HEADERLENGTH:]) # TODO: Remove
                                 RNS.log(f"Stamped path request for {RNS.prettyhexrep(destination_hash)} with value {dval}", RNS.LOG_DEBUG)
 
                     if packet.receiving_interface: packet.receiving_interface.received_path_request(size=len(raw))
@@ -3900,8 +3901,11 @@ class Transport:
     # Path Request Helpers #
     ########################
 
-    PR_LENGTH         = 3*RNS.Identity.TRUNCATED_HASHLENGTH//8
-    PR_STAMPED_LENGTH = PR_LENGTH+RNS.Identity.EXTPAYLOADLENGTH
+    PR_EXT_HEADERLENGTH  = 2
+    PR_EXT_STAMPLENGTH   = RNS.Identity.STAMPLENGTH
+    PR_EXT_PAYLOADLENGTH = PR_EXT_HEADERLENGTH+PR_EXT_STAMPLENGTH
+    PR_LENGTH            = 3*RNS.Identity.TRUNCATED_HASHLENGTH//8
+    PR_STAMPED_LENGTH    = PR_LENGTH+PR_EXT_PAYLOADLENGTH
     @staticmethod
     def parse_path_request(data):
         DL = RNS.Identity.TRUNCATED_HASHLENGTH//8
