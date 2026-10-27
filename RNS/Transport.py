@@ -2064,7 +2064,9 @@ class Transport:
                             if ext_payload[0] == RNS.Identity.EXTPAYLOADMARKER:
                                 stamp = ext_payload[RNS.Identity.EXTHEADERLENGTH:]
                                 stamp_ok = Transport.validate_pr_stamp(stamp, destination_hash, tag_bytes)
-                                if not stamp_ok: RNS.log(f"Invalid or insufficient path request stamp for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Reset level
+                                if not stamp_ok:
+                                    if ext_payload[1] == 0xFF: RNS.log(f"Unstamped relayed path request from stamp-aware node for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Remove this transitory diagnostics check once enforcement is enabled
+                                    else: RNS.log(f"Invalid or insufficient path request stamp for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Reset level
                             else: RNS.log(f"Unrecognized stamp payload in path request for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Reset level
                         else: RNS.log(f"Unstamped path request for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Reset level
 
@@ -2073,9 +2075,10 @@ class Transport:
                             if Transport.STAMPS_ENFORCED: return
 
                         else: # TODO: Remove
-                            workblock = stamp_workblock(Transport.pr_stamp_material(destination_hash, tag_bytes), expand_rounds=0) # TODO: Remove
-                            dval = stamp_value(workblock, ext_payload[RNS.Identity.EXTHEADERLENGTH:]) # TODO: Remove
-                            RNS.log(f"Stamped path request for {RNS.prettyhexrep(destination_hash)} with value {dval}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Remove
+                            if RNS.sl(RNS.LOG_DEBUG): # TODO: Remove
+                                workblock = stamp_workblock(Transport.pr_stamp_material(destination_hash, tag_bytes), expand_rounds=0) # TODO: Remove
+                                dval = stamp_value(workblock, ext_payload[RNS.Identity.EXTHEADERLENGTH:]) # TODO: Remove
+                                RNS.log(f"Stamped path request for {RNS.prettyhexrep(destination_hash)} with value {dval}", RNS.LOG_DEBUG)
 
                     if packet.receiving_interface: packet.receiving_interface.received_path_request(size=len(raw))
                     Transport.pr_rxc += 1
@@ -3814,6 +3817,14 @@ class Transport:
 
             if discovery_path_request_exists and path_request_engaged: RNS.log("There is already a waiting path request for "+RNS.prettyhexrep(destination_hash)+" on behalf of path request"+interface_str, RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
             else:
+                # Sentinel check for potential enforcement logic leaks.
+                # This branch should never fire, but better have it made
+                # visible and explicit if for some unexpected reason it does.
+                if ext_payload == None and Transport.STAMPS_ENFORCED:
+                    # TODO: Remove *after* enforcement transition and verification.
+                    RNS.log(f"Reached rebroadcast decision for unstamped path request for {RNS.prettyhexrep(destination_hash)} under stamp enforcement. This should not happen.", RNS.LOG_CRITICAL)
+                    return
+
                 # Abort recursive path request if receiving
                 # interface has PR burst active, or should
                 # otherwise ingress limit path requests.
@@ -3845,10 +3856,6 @@ class Transport:
                     Transport.discovery_path_requests[destination_hash] = pr_entry
 
                 # TODO: Remove
-                if ext_payload == None and Transport.STAMPS_ENFORCED:
-                    RNS.log(f"Reached rebroadcast decision for unstamped path request for {RNS.prettyhexrep(destination_hash)} under stamp enforcement. This should not happen.", RNS.LOG_CRITICAL)
-
-                # TODO: Remove
                 # Don't generate stamps for non-stamped recursive
                 # path requests received from non-stamping nodes
                 # during the transition period where this node may
@@ -3868,6 +3875,14 @@ class Transport:
                             Transport.request_path(destination_hash, on_interface=interface, tag=tag, recursive=True, ext_payload=ext_payload)
 
         elif not is_from_local_client and len(Transport.local_client_interfaces) > 0:
+            # TODO: Remove
+            # Don't generate stamps for non-stamped external
+            # path requests received from non-stamping nodes
+            # during the transition period where this node may
+            # be stamping, but still accepting unstamped PRs.
+            if ext_payload == None and Transport.STAMP_PRS:
+                ext_payload = bytes([RNS.Identity.EXTPAYLOADMARKER, 0xFF])+bytes(RNS.Identity.STAMPLENGTH)
+
             # Forward the path request on all local client interfaces
             RNS.log(f"Forwarding path request for {RNS.prettyhexrep(destination_hash)}{interface_str} to local clients", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
             for interface in Transport.local_client_interfaces:
