@@ -1120,7 +1120,7 @@ class Transport:
                             cull_count = len(unused_paths) - Transport.PATH_POOL_UNUSED_TARGET
                             RNS.log(f"Culling {cull_count} never used path table entries to reach pool size target {Transport.PATH_POOL_UNUSED_TARGET}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
                             unused_paths.sort()
-                            for cull_entry in unused_paths[-cull_count:]:
+                            for cull_entry in unused_paths[:cull_count]:
                                 stale_paths.append(cull_entry[1])
 
                         if check_unused:
