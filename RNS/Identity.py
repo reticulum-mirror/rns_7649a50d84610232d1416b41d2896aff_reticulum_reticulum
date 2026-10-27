@@ -80,13 +80,13 @@ class Identity:
     AES128_BLOCKSIZE          = 16          # In bytes
     AES256_BLOCKSIZE          = 16          # In bytes
     HASHLENGTH                = 256         # In bits
+    NAME_HASH_LENGTH          = 80          # In bits
     SIGLENGTH                 = KEYSIZE     # In bits
     STAMPLENGTH               = 14          # In bytes
     EXTHEADERLENGTH           = 2           # In bytes
     EXTPAYLOADLENGTH          = EXTHEADERLENGTH+STAMPLENGTH
     EXTPAYLOADMARKER          = 0xC1 # Never used at msgpack object boundaries
 
-    NAME_HASH_LENGTH          = 80
     TRUNCATED_HASHLENGTH      = RNS.Reticulum.TRUNCATED_HASHLENGTH
     """
     Constant specifying the truncated hash length (in bits) used by Reticulum
