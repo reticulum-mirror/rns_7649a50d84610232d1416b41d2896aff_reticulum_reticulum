@@ -262,11 +262,7 @@ class KnownDestinationsStore:
             ratchet          BLOB NOT NULL,
             received         REAL NOT NULL)""")
 
-        if 0 < db_version < 2:
-            # Version 2 adds the announced link request cost column. On migrated
-            # databases this column trails identity_hash, so all writes must name
-            # their target columns explicitly.
-            self._conn.execute("ALTER TABLE known_destinations ADD COLUMN lr_cost INTEGER")
+        if 0 < db_version < 2: self._conn.execute("ALTER TABLE known_destinations ADD COLUMN lr_cost INTEGER")
 
         self._conn.execute("PRAGMA user_version = 2")
         self._conn.commit()
