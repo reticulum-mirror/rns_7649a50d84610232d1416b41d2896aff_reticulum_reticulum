@@ -362,6 +362,14 @@ class Destination:
     def get_ext_flags(self):
         return 0x00
 
+    def set_link_cost(self, cost):
+        """
+        Sets the required link establishment stamp cost for this destination. Set to 0 to disable.
+
+        :param cost: The required cost as an *integer*.
+        """
+        self.link_cost = max(0, min(int(cost), RNS.Transport.LINK_COST_CAP))
+
     def get_link_cost(self):
         """
         Returns the link request stamp cost to be announced for this
@@ -488,8 +496,7 @@ class Destination:
     def incoming_link_request(self, data, packet):
         if self.accept_link_requests:
             link = RNS.Link.validate_request(self, data, packet)
-            if link != None:
-                self.links.append(link)
+            if link != None: self.links.append(link)
 
     def _reload_ratchets(self, ratchets_path):
         if os.path.isfile(ratchets_path):

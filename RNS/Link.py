@@ -28,8 +28,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from RNS.Cryptography import X25519PrivateKey, X25519PublicKey, Ed25519PrivateKey, Ed25519PublicKey
-from RNS.Cryptography import Token
+from RNS.Cryptography import X25519PrivateKey, X25519PublicKey, Ed25519PrivateKey, Ed25519PublicKey, Token
+from RNS.Stamps import stamp_valid, stamp_value, generate_stamped_key, cancel_work
 from RNS.Channel import Channel, LinkChannelOutlet
 
 from time import sleep
@@ -116,6 +116,7 @@ class Link:
     TIMEOUT             = 0x01
     INITIATOR_CLOSED    = 0x02
     DESTINATION_CLOSED  = 0x03
+    STAMP_FAILURE       = 0x04
 
     ACCEPT_NONE         = 0x00
     ACCEPT_APP          = 0x01
@@ -186,8 +187,18 @@ class Link:
     def validate_request(owner, data, packet):
         if len(data) == Link.ECPUBSIZE or len(data) == Link.ECPUBSIZE+Link.LINK_MTU_SIZE:
             try:
-                link = Link(owner = owner, peer_pub_bytes=data[:Link.ECPUBSIZE//2], peer_sig_pub_bytes=data[Link.ECPUBSIZE//2:Link.ECPUBSIZE])
+                peer_pub_bytes     = data[:Link.ECPUBSIZE//2]
+                peer_sig_pub_bytes = data[Link.ECPUBSIZE//2:Link.ECPUBSIZE]
+                stamp_material     = owner.hash + peer_sig_pub_bytes
+                value              = stamp_value(stamp_material, peer_pub_bytes)
+
+                RNS.log(f"Incoming LR value: {value}", RNS.LOG_DEBUG) # TODO: Remove
+                if RNS.Transport.LR_STAMPS_ENFORCED and value < owner.get_link_cost(): raise ValueError(f"Insufficient link request stamp value {value}")
+
+                link = Link(owner=owner, peer_pub_bytes=peer_pub_bytes, peer_sig_pub_bytes=peer_sig_pub_bytes)
                 link.set_link_id(packet)
+                link.stamp_cost = value
+                link.stamp_status = True
 
                 if len(data) == Link.ECPUBSIZE+Link.LINK_MTU_SIZE:
                     RNS.log("Link request includes MTU signalling", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
@@ -203,7 +214,7 @@ class Link:
                 link.destination = packet.destination
                 link.establishment_timeout = Link.ESTABLISHMENT_TIMEOUT_PER_HOP * max(1, packet.hops) + Link.KEEPALIVE
                 link.establishment_cost += len(packet.raw)
-                RNS.log(f"Validating link request {RNS.prettyhexrep(link.link_id)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+                RNS.log(f"Validating link request {RNS.prettyhexrep(link.link_id)} with value {value}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
                 RNS.log(f"Link MTU configured to {RNS.prettysize(link.mtu)}", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
                 RNS.log(f"Establishment timeout is {RNS.prettytime(link.establishment_timeout)} for incoming link request {RNS.prettyhexrep(link.link_id)}", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
                 link.handshake()
@@ -219,7 +230,7 @@ class Link:
                 return link
 
             except Exception as e:
-                RNS.log(f"Validating link request failed: {e}", RNS.LOG_VERBOSE) if RNS.sl(RNS.LOG_VERBOSE) else None
+                RNS.log(f"Validating incoming link request failed: {e}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
                 return None
 
         else:
@@ -230,6 +241,7 @@ class Link:
     def __init__(self, destination=None, established_callback=None, closed_callback=None, owner=None, peer_pub_bytes=None, peer_sig_pub_bytes=None, mode=MODE_DEFAULT):
         if destination != None and destination.type != RNS.Destination.SINGLE: raise TypeError("Links can only be established to the \"single\" destination type")
         self.mode = mode
+        self.link_id = None
         self.rtt = None
         self.mtu = RNS.Reticulum.MTU
         self.establishment_cost = 0
@@ -260,6 +272,8 @@ class Link:
         self.stale_time = Link.STALE_TIME
         self.watchdog_lock = False
         self.status = Link.PENDING
+        self.stamp_status = None
+        self.stamp_job_id = None
         self.activated_at = None
         self.type = RNS.Destination.LINK
         self.owner = owner
@@ -267,6 +281,19 @@ class Link:
         self.expected_hops = None
         self.rebalanced = None
         self.attached_interface = None
+        self.stamp_cost = None
+        self.stamp_material = None
+        self.packet = None
+        self.token = None
+        self.hash = None
+        self.prv = None
+        self.prv_bytes = None
+        self.sig_prv = None
+        self.pub = None
+        self.pub_bytes = None
+        self.sig_pub = None
+        self.sig_pub_bytes = None
+        self.__defer_keys = False
         self.__remote_identity = None
         self.__track_phy_stats = False
         self._channel = None
@@ -279,21 +306,25 @@ class Link:
         else:
             self.initiator = True
             self.expected_hops = RNS.Transport.hops_to(self.destination.hash)
-            self.establishment_timeout  = RNS.Reticulum.get_instance().get_first_hop_timeout(destination.hash)
-            self.establishment_timeout += Link.ESTABLISHMENT_TIMEOUT_PER_HOP * max(1, RNS.Transport.hops_to(destination.hash))
-            self.prv     = X25519PrivateKey.generate()
-            self.sig_prv = Ed25519PrivateKey.generate()
+            self.establishment_timeout  = RNS.Reticulum.get_instance().get_first_hop_timeout(self.destination.hash)
+            self.establishment_timeout += Link.ESTABLISHMENT_TIMEOUT_PER_HOP * max(1, RNS.Transport.hops_to(self.destination.hash))
+            self.stamp_cost = RNS.Identity.recall_link_cost(self.destination.hash)
 
-        self.token  = None
-        
-        self.pub = self.prv.public_key()
-        self.pub_bytes = self.pub.public_bytes()
+            if self.stamp_cost and RNS.Transport.STAMP_LRS: self.__defer_keys = True
+            else:
+                self.prv     = X25519PrivateKey.generate()
+                self.sig_prv = Ed25519PrivateKey.generate()
 
-        self.sig_pub = self.sig_prv.public_key()
-        self.sig_pub_bytes = self.sig_pub.public_bytes()
+        if not self.__defer_keys:
+            self.pub           = self.prv.public_key()
+            self.pub_bytes     = self.pub.public_bytes()
+            self.sig_pub       = self.sig_prv.public_key()
+            self.sig_pub_bytes = self.sig_pub.public_bytes()
+
+        else: RNS.log(f"Stamped link request, deferring key generation", RNS.LOG_DEBUG) # TODO: Remove
 
         if peer_pub_bytes == None:
-            self.peer_pub = None
+            self.peer_pub       = None
             self.peer_pub_bytes = None
 
         else: self.load_peer(peer_pub_bytes, peer_sig_pub_bytes)
@@ -302,26 +333,81 @@ class Link:
         if closed_callback != None:      self.set_link_closed_callback(closed_callback)
 
         if self.initiator:
-            signalling_bytes = b""
-            nh_hw_mtu = RNS.Transport.next_hop_interface_hw_mtu(destination.hash)
-            if RNS.Reticulum.link_mtu_discovery() and nh_hw_mtu:
-                signalling_bytes = Link.signalling_bytes(nh_hw_mtu, self.mode)
-                RNS.log(f"Signalling link MTU of {RNS.prettysize(nh_hw_mtu)} for link", RNS.LOG_DEBUG) # TODO: Remove debug
-            else: signalling_bytes = Link.signalling_bytes(RNS.Reticulum.MTU, self.mode)
-            RNS.log(f"Establishing link with mode {Link.MODE_DESCRIPTIONS[self.mode]}", RNS.LOG_DEBUG) # TODO: Remove debug
-            self.request_data = self.pub_bytes+self.sig_pub_bytes+signalling_bytes
-            self.packet = RNS.Packet(destination, self.request_data, packet_type=RNS.Packet.LINKREQUEST)
-            self.packet.pack()
-            self.establishment_cost += len(self.packet.raw)
-            self.set_link_id(self.packet)
-            RNS.Transport.register_link(self)
-            self.request_time = time.time()
-            self.start_watchdog()
-            self.packet.send()
-            self.had_outbound()
-            RNS.log("Link request "+RNS.prettyhexrep(self.link_id)+" sent to "+str(self.destination), RNS.LOG_DEBUG)
-            RNS.log(f"Establishment timeout is {RNS.prettytime(self.establishment_timeout)} for link request "+RNS.prettyhexrep(self.link_id), RNS.LOG_EXTREME)
+            if not self.__defer_keys: self.__initiate()
+            else: threading.Thread(target=self.__initiate, daemon=True).start()
 
+    def __stamp_failed(self):
+        if self.status != Link.CLOSED:
+            self.teardown_reason = Link.STAMP_FAILURE
+            self.stamp_status = False
+            self.status = Link.CLOSED
+            self.link_closed()
+
+    def __initiate(self):
+        if self.status != Link.PENDING: return
+        if self.__defer_keys:
+            try:
+                def stamp_watchdog():
+                    deadline = time.time() + RNS.Transport.LINK_STAMP_TIMEOUT
+                    while self.stamp_status == None and time.time() <= deadline: time.sleep(1)
+                    if time.time() > deadline and self.stamp_job_id and not self.stamp_status: cancel_work(self.stamp_job_id)
+
+                self.sig_prv        = Ed25519PrivateKey.generate()
+                self.sig_pub        = self.sig_prv.public_key()
+                self.sig_pub_bytes  = self.sig_pub.public_bytes()
+                self.stamp_material = self.destination.hash + self.sig_pub_bytes
+
+                RNS.log(f"Starting stamp generation for link request to {self.destination}", RNS.LOG_DEBUG) # TODO: Remove
+                self.stamp_job_id = self.stamp_material
+                threading.Thread(target=stamp_watchdog, daemon=True).start()
+                stamped_key, v = generate_stamped_key(material=self.stamp_material, stamp_cost=self.stamp_cost)
+                self.stamp_job_id = None
+
+                if stamped_key:
+                    stamped_prv    = stamped_key[0]
+                    self.prv       = X25519PrivateKey.from_private_bytes(stamped_prv)
+                    self.prv_bytes = self.prv.private_bytes()
+                    self.pub       = self.prv.public_key()
+                    self.pub_bytes = self.pub.public_bytes()
+
+                    if self.prv_bytes != stamped_prv or self.prv.public_key().public_bytes() != stamped_key[1]:
+                        RNS.log(f"Stamped link request key generation mismatch, aborting link establishment", RNS.LOG_WARNING)
+                        self.__stamp_failed()
+                        return
+
+                    self.stamp_status = True
+
+                else:
+                    self.__stamp_failed()
+                    return
+
+            except Exception as e:
+                RNS.log(f"Error while generating link request stamp: {e}", RNS.LOG_ERROR)
+                RNS.trace_exception(e)
+                self.__stamp_failed()
+                return
+
+        if self.status != Link.PENDING: return
+
+        signalling_bytes = b""
+        nh_hw_mtu = RNS.Transport.next_hop_interface_hw_mtu(self.destination.hash)
+        if RNS.Reticulum.link_mtu_discovery() and nh_hw_mtu:
+            signalling_bytes = Link.signalling_bytes(nh_hw_mtu, self.mode)
+            RNS.log(f"Signalling link MTU of {RNS.prettysize(nh_hw_mtu)} for link", RNS.LOG_DEBUG) # TODO: Remove debug
+        else: signalling_bytes = Link.signalling_bytes(RNS.Reticulum.MTU, self.mode)
+        RNS.log(f"Establishing link with mode {Link.MODE_DESCRIPTIONS[self.mode]}", RNS.LOG_DEBUG) # TODO: Remove debug
+        request_data = self.pub_bytes+self.sig_pub_bytes+signalling_bytes
+        self.packet = RNS.Packet(self.destination, request_data, packet_type=RNS.Packet.LINKREQUEST)
+        self.packet.pack()
+        self.establishment_cost += len(self.packet.raw)
+        self.set_link_id(self.packet)
+        RNS.Transport.register_link(self)
+        self.request_time = time.time()
+        self.start_watchdog()
+        self.packet.send()
+        self.had_outbound()
+        RNS.log(f"Link request {RNS.prettyhexrep(self.link_id)} sent to {self.destination}", RNS.LOG_DEBUG)
+        RNS.log(f"Establishment timeout is {RNS.prettytime(self.establishment_timeout)} for link request {RNS.prettyhexrep(self.link_id)}", RNS.LOG_EXTREME)
 
     def load_peer(self, peer_pub_bytes, peer_sig_pub_bytes):
         self.peer_pub_bytes = peer_pub_bytes
@@ -670,6 +756,7 @@ class Link:
         self.status = Link.CLOSED
         if self.initiator: self.teardown_reason = Link.INITIATOR_CLOSED
         else: self.teardown_reason = Link.DESTINATION_CLOSED
+        if self.stamp_job_id: cancel_work(self.stamp_job_id); self.stamp_status = False
         self.link_closed()
 
     def teardown_packet(self, packet):

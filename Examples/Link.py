@@ -42,6 +42,9 @@ def server(configpath):
         "linkexample"
     )
 
+    # We can optionally configure a link request stamp cost
+    server_destination.set_link_cost(14)
+
     # We configure a function that will get called every time
     # a new client creates a link to this destination.
     server_destination.set_link_established_callback(client_connected)

@@ -190,14 +190,18 @@ class Transport:
 
     STAMPS_ENABLED              = True         # Whether to check for and validate stamps on announces and path requests
     STAMPS_ENFORCED             = False        # Whether to enforce stamp requirements
+    LR_STAMPS_ENFORCED          = False        # Whether to enforce link request stamp requirements
     STAMP_DESTINATIONS          = False        # Whether to stamp destination announces emitted from this instance
     STAMP_PRS                   = False        # Whether to stamp path requests emitted from this instance
+    STAMP_LRS                   = True         # Whether to stamp link requests emitted from this instance
     STAMP_COST_CAP              = 100          # Global hard cap on stamp cost to ensure search-space viability at 14-byte stamp sizes
+    LINK_COST_CAP               = 40           # Global hard cap on link request cost, separate from detached stamps
     DESTINATION_COST            = 23           # Default required announce cost if no specifics configured or determined
     DESTINATION_VALUE           = 23           # Default target stamp value for emitted announces
     PR_COST                     = 19           # Default required path request cost if no specifics configured or determined
     PR_VALUE                    = 19           # Default target stamp value for emitted path requests
-    LR_COST                     = 19           # Default required link request cost if not explicitly announced or configured
+    LR_COST                     = 14           # Default required link request cost if not explicitly announced or configured
+    LINK_STAMP_TIMEOUT          = 16           # TODO: Provisional, set sensible default and wire to config
 
     STAMPER_PR_QUEUE_LENGTH     = 32           # TODO: Provisional, wire to config handling
     STAMPER_AN_QUEUE_LENGTH     = 32           # TODO: Provisional, wire to config handling
