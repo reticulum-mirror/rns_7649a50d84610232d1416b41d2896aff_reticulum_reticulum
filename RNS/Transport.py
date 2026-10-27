@@ -2058,7 +2058,7 @@ class Transport:
                         RNS.log("Ignoring duplicate path request for "+RNS.prettyhexrep(destination_hash)+" with tag "+RNS.prettyhexrep(unique_tag), RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
                         return
 
-                    if RNS.Transport.STAMPS_ENABLED:
+                    if Transport.STAMPS_ENABLED:
                         stamp_ok = False
                         if ext_payload != None:
                             if ext_payload[0] == RNS.Identity.EXTPAYLOADMARKER:
@@ -2070,7 +2070,7 @@ class Transport:
 
                         if not stamp_ok:
                             RNS.log(f"Insufficiently stamped path request for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Remove
-                            if RNS.Transport.STAMPS_ENFORCED: return
+                            if Transport.STAMPS_ENFORCED: return
 
                         else: # TODO: Remove
                             workblock = stamp_workblock(Transport.pr_stamp_material(destination_hash, tag_bytes), expand_rounds=0) # TODO: Remove
@@ -2259,7 +2259,7 @@ class Transport:
                             new_raw += struct.pack("!B", packet.hops)
                             new_raw += packet.raw[(RNS.Identity.TRUNCATED_HASHLENGTH//8)+2:]
                         elif remaining_hops == 0:
-                            if to_local_client and RNS.Transport.local_hops_delta != 0:
+                            if to_local_client and Transport.local_hops_delta != 0:
                                 if packet.header_type == RNS.Packet.HEADER_2:
                                     # Strip transport headers and transmit
                                     new_flags = (RNS.Packet.HEADER_1) << 6 | (Transport.BROADCAST) << 4 | (packet.flags & 0b00001111)
@@ -3299,7 +3299,7 @@ class Transport:
     # the packet cache.
     @staticmethod
     def cache(packet, force_cache=False, packet_type=None):
-        if force_cache or RNS.Transport.should_cache(packet):
+        if force_cache or Transport.should_cache(packet):
             try:
                 interface_reference = None
                 if packet.receiving_interface != None: interface_reference = str(packet.receiving_interface)
@@ -3607,7 +3607,7 @@ class Transport:
         return Transport.has_path(destination_hash)
 
     @staticmethod
-    def request_path(destination_hash, on_interface=None, tag=None, recursive=False, stamped_ext=None):
+    def request_path(destination_hash, on_interface=None, tag=None, recursive=False, ext_payload=None):
         """
         Requests a path to the destination from the network. If
         another reachable peer on the network knows a path, it
@@ -3615,7 +3615,7 @@ class Transport:
 
         :param destination_hash: A destination hash as *bytes*.
         :param on_interface: If specified, the path request will only be sent on this interface. In normal use, Reticulum handles this automatically, and this parameter should not be used.
-        :param stamped_ext: Internal flag used by :ref:`RNS.Transport<api-transport>`. Ignore.
+        :param ext_payload: Internal use by :ref:`RNS.Transport<api-transport>`. Ignore.
         """
         if on_interface and recursive and on_interface.should_egress_limit_pr():
             RNS.log(f"Blocking recursive path request on {on_interface} due to active egress limiting", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
@@ -3627,10 +3627,10 @@ class Transport:
         path_request_data = destination_hash+Transport.identity.hash+request_tag
 
         # If a stamped extension is ready, include it
-        if stamped_ext != None: path_request_data += stamped_ext
+        if ext_payload != None: path_request_data += ext_payload
 
         # Otherwise, check if we need to include a PR stamp
-        elif RNS.Transport.STAMP_PRS:
+        elif Transport.STAMP_PRS:
             material = Transport.pr_stamp_material(destination_hash, request_tag)
             with Transport.pr_stamp_cache_lock: stamp = Transport.pr_stamp_cache.get(material, None)
 
@@ -3687,12 +3687,12 @@ class Transport:
 
             Transport.path_request(destination_hash, Transport.from_local_client(packet), packet.receiving_interface,
                                    requestor_transport_id=requesting_tid, tag=tag_bytes, ingress_limited=ingress_limited,
-                                   stamped_ext=ext_payload)
+                                   ext_payload=ext_payload)
 
         except Exception as e: RNS.log(f"Error while handling path request. The contained exception was: {e}", RNS.LOG_ERROR)
 
     @staticmethod
-    def path_request(destination_hash, is_from_local_client, attached_interface, requestor_transport_id=None, tag=None, ingress_limited=False, stamped_ext=None):
+    def path_request(destination_hash, is_from_local_client, attached_interface, requestor_transport_id=None, tag=None, ingress_limited=False, ext_payload=None):
         should_search_for_unknown = False
         should_ingress_limit      = False
         search_mode_filter        = None
@@ -3801,7 +3801,7 @@ class Transport:
             RNS.log(f"Forwarding path request from local client for {RNS.prettyhexrep(destination_hash)+interface_str} to all other interfaces", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
             for interface in Transport.interfaces:
                 if not interface == attached_interface:
-                    Transport.request_path(destination_hash, interface, tag=tag, stamped_ext=stamped_ext)
+                    Transport.request_path(destination_hash, interface, tag=tag, ext_payload=ext_payload)
 
         elif should_search_for_unknown:
             with Transport.discovery_pr_lock:
@@ -3812,8 +3812,7 @@ class Transport:
                     discovery_path_request_exists  = False
                     path_request_engaged           = False
 
-            if discovery_path_request_exists and path_request_engaged:
-                RNS.log("There is already a waiting path request for "+RNS.prettyhexrep(destination_hash)+" on behalf of path request"+interface_str, RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
+            if discovery_path_request_exists and path_request_engaged: RNS.log("There is already a waiting path request for "+RNS.prettyhexrep(destination_hash)+" on behalf of path request"+interface_str, RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
             else:
                 # Abort recursive path request if receiving
                 # interface has PR burst active, or should
@@ -3845,6 +3844,18 @@ class Transport:
 
                     Transport.discovery_path_requests[destination_hash] = pr_entry
 
+                # TODO: Remove
+                if ext_payload == None and Transport.STAMPS_ENFORCED:
+                    RNS.log(f"Reached rebroadcast decision for unstamped path request for {RNS.prettyhexrep(destination_hash)} under stamp enforcement. This should not happen.", RNS.LOG_CRITICAL)
+
+                # TODO: Remove
+                # Don't generate stamps for non-stamped recursive
+                # path requests received from non-stamping nodes
+                # during the transition period where this node may
+                # be stamping, but still accepting unstamped PRs.
+                if ext_payload == None and Transport.STAMP_PRS:
+                    ext_payload = bytes([RNS.Identity.EXTPAYLOADMARKER, 0xFF])+bytes(RNS.Identity.STAMPLENGTH)
+
                 for interface in Transport.interfaces:
                     if search_mode_filter and not interface.mode in search_mode_filter: continue
                     if not interface.online: continue
@@ -3852,19 +3863,15 @@ class Transport:
                         if interface.should_egress_limit_pr():
                             RNS.log(f"Not sending recursive path request on {interface} due to active egress limiting", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
                         else:
-                            if stamped_ext == None and RNS.Transport.STAMPS_ENFORCED:
-                                RNS.log(f"Reached rebroadcast decision for unstamped path request for {RNS.prettyhexrep(destination_hash)} under stamp enforcement. This should not happen.", RNS.LOG_CRITICAL)
-                                break
-
                             # Use the previously extracted tag from this path request
                             # on the new path requests as well, to avoid potential loops
-                            Transport.request_path(destination_hash, on_interface=interface, tag=tag, recursive=True, stamped_ext=stamped_ext)
+                            Transport.request_path(destination_hash, on_interface=interface, tag=tag, recursive=True, ext_payload=ext_payload)
 
         elif not is_from_local_client and len(Transport.local_client_interfaces) > 0:
             # Forward the path request on all local client interfaces
             RNS.log(f"Forwarding path request for {RNS.prettyhexrep(destination_hash)}{interface_str} to local clients", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
             for interface in Transport.local_client_interfaces:
-                Transport.request_path(destination_hash, on_interface=interface, tag=tag, stamped_ext=stamped_ext)
+                Transport.request_path(destination_hash, on_interface=interface, tag=tag, ext_payload=ext_payload)
         else:
             RNS.log(f"Ignoring path request for {RNS.prettyhexrep(destination_hash)}{interface_str}, no path known", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
 
@@ -3912,7 +3919,7 @@ class Transport:
 
     @staticmethod
     def validate_pr_stamp(stamp, destination_hash, tag, required_value=None):
-        if required_value == None: required_value = RNS.Transport.PR_COST
+        if required_value == None: required_value = Transport.PR_COST
         if not stamp or len(stamp) != RNS.Identity.STAMPLENGTH: return False
         workblock = stamp_workblock(Transport.pr_stamp_material(destination_hash, tag), expand_rounds=0)
         return stamp_valid(stamp, required_value, workblock)
@@ -3924,7 +3931,7 @@ class Transport:
 
         material = Transport.pr_stamp_material(destination_hash, request_tag)
         with Transport.pr_stamp_cache_lock: stamp = Transport.pr_stamp_cache.get(material, None)
-        if not stamp: stamp, value = generate_stamp(material, stamp_cost=RNS.Transport.PR_VALUE, expand_rounds=0, size=RNS.Identity.STAMPLENGTH)
+        if not stamp: stamp, value = generate_stamp(material, stamp_cost=Transport.PR_VALUE, expand_rounds=0, size=RNS.Identity.STAMPLENGTH)
         if not stamp:
             RNS.log(f"Could not generate path request stamp for {RNS.prettyhexrep(destination_hash)}, path request emission cancelled", RNS.LOG_WARNING)
             return
@@ -3935,7 +3942,7 @@ class Transport:
                 Transport.pr_stamp_cache.pop(next(iter(Transport.pr_stamp_cache)))
 
         ext_payload = bytes([RNS.Identity.EXTPAYLOADMARKER, 0x00])+stamp
-        Transport.request_path(destination_hash, on_interface=on_interface, tag=request_tag, recursive=recursive, stamped_ext=ext_payload)
+        Transport.request_path(destination_hash, on_interface=on_interface, tag=request_tag, recursive=recursive, ext_payload=ext_payload)
 
     discovery_pr_tx_throttle = 0.5
     discovery_pr_tx_lock     = Lock()
