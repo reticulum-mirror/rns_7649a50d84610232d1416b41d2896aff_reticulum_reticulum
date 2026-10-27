@@ -94,7 +94,6 @@ class Identity:
     """
 
     DERIVED_KEY_LENGTH        = 512//8
-    DERIVED_KEY_LENGTH_LEGACY = 256//8
 
     # Storage
     known_destinations = {}
