@@ -224,9 +224,11 @@ class Transport:
     REVERSE_TIMEOUT             = 8*60         # Reverse table entries are removed after 8 minutes
     PATH_TIMEOUT                = 60*60*24*7   # Path table entry retainment after last cryptographically verifiable liveness event
     UNUSED_PATH_LINGER          = 60*60*1.75   # Linger time for never used paths
-    UNUSED_PATH_LINGER_LEAF     = 60*5         # Linger time for never used paths on non-transport instances
+    UNUSED_PATH_LINGER_LEAF     = 60*12        # Linger time for never used paths on non-transport instances
     UNUSED_DESTINATION_LINGER   = 60*6         # Linger time for pathless and never used destinations
     PATH_POOL_UNUSED_TARGET     = 2048         # Max unused path table pool target, unused destinations are culled to reach it
+    PATH_SLOW_BITRATE           = 25000        # Bitrate threshold for interfaces to be considered slow
+    PATH_SLOW_LINGER_FACTOR     = 10           # Linger time multiplier for never used paths on slow interfaces
     TUNNEL_TIMEOUT              = 60*60*8      # Tunnel table entries are removed if unused for eight hours
     TUNNEL_PATH_TIMEOUT         = 60*60*8      # Tunnel path table entries are removed if unused for eight hours
     RATE_TABLE_RETAIN           = 60*60        # Default announce rate table retainment, increased dynamically
@@ -1115,7 +1117,11 @@ class Transport:
                             path_expiry        = path_entry[IDX_PT_EXPIRES]
                             path_used          = path_entry[IDX_PT_USED]
 
-                            if check_unused and not path_used: unused_paths.append((path_expiry, destination_hash))
+                            interface_bitrate  = getattr(attached_interface, "bitrate", None)
+                            slow_interface     = interface_bitrate != None and 0 < interface_bitrate < Transport.PATH_SLOW_BITRATE
+
+                            if check_unused and not path_used:
+                                unused_paths.append(((1 if slow_interface else 0), path_expiry, destination_hash))
 
                             if now > path_expiry:
                                 stale_paths.append(destination_hash)
@@ -1125,7 +1131,7 @@ class Transport:
                                 stale_paths.append(destination_hash)
                                 Transport.should_collect = True
                                 RNS.log(f"Path to {RNS.prettyhexrep(destination_hash)} was removed since the attached interface no longer exists", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
-                            elif path_used == 0 and now > path_timestamp + Transport.unused_path_linger:
+                            elif path_used == 0 and now > path_timestamp + (Transport.unused_path_linger * (Transport.PATH_SLOW_LINGER_FACTOR if slow_interface else 1)):
                                 stale_paths.append(destination_hash)
                                 Transport.should_collect = True
                                 RNS.log(f"Removing never used path to {RNS.prettyhexrep(destination_hash)}", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
