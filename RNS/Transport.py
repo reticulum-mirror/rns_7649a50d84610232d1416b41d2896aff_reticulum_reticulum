@@ -2077,21 +2077,29 @@ class Transport:
                             if ext_payload[0] == RNS.Identity.EXTPAYLOADMARKER:
                                 stamp = ext_payload[Transport.PR_EXT_HEADERLENGTH:]
                                 stamp_ok = Transport.validate_pr_stamp(stamp, destination_hash, tag_bytes)
+
+                                # TODO: Remove debug block #############
+                                dval = None
+                                if RNS.sl(RNS.LOG_DEBUG):
+                                    workblock = stamp_workblock(Transport.pr_stamp_material(destination_hash, tag_bytes), expand_rounds=0) # TODO: Remove
+                                    dval = stamp_value(workblock, ext_payload[Transport.PR_EXT_HEADERLENGTH:]) # TODO: Remove
+                                    RNS.log(f"Stamped path request for {RNS.prettyhexrep(destination_hash)} with value {dval}", RNS.LOG_DEBUG)
+                                ########################################
+
                                 if not stamp_ok:
-                                    if ext_payload[1] == 0xFF: RNS.log(f"Unstamped relayed path request from stamp-aware node for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Remove this transitory diagnostics check once enforcement is enabled
-                                    else: RNS.log(f"Invalid or insufficient path request stamp for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Reset level
+                                    if ext_payload[1] == 0xFF: RNS.log(f"Unstamped relayed path request from stamp-aware node for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None # TODO: Remove this transitory diagnostics check once enforcement is enabled
+                                    # else: RNS.log(f"Invalid or insufficient path request stamp for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
+                                    # TODO: Reset to collapsed LOG_EXTREME message commented out above #####
+                                    else:
+                                        if RNS.sl(RNS.LOG_DEBUG):
+                                            if dval: RNS.log(f"Invalid or insufficient (v:{dval}) path request stamp for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+                                            else:    RNS.log(f"Invalid or insufficient path request stamp for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+                                    ########################################################################
                             else: RNS.log(f"Unrecognized stamp payload in path request for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Reset level
-                        else: RNS.log(f"Unstamped path request for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Reset level
+                        else: RNS.log(f"Unstamped path request for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None # TODO: Remove after transition, simply drop
 
                         if not stamp_ok:
-                            RNS.log(f"Insufficiently stamped path request for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Remove
                             if Transport.STAMPS_ENFORCED: return
-
-                        else: # TODO: Remove
-                            if RNS.sl(RNS.LOG_DEBUG): # TODO: Remove
-                                workblock = stamp_workblock(Transport.pr_stamp_material(destination_hash, tag_bytes), expand_rounds=0) # TODO: Remove
-                                dval = stamp_value(workblock, ext_payload[Transport.PR_EXT_HEADERLENGTH:]) # TODO: Remove
-                                RNS.log(f"Stamped path request for {RNS.prettyhexrep(destination_hash)} with value {dval}", RNS.LOG_DEBUG)
 
                     if packet.receiving_interface: packet.receiving_interface.received_path_request(size=len(raw))
                     Transport.pr_rxc += 1
