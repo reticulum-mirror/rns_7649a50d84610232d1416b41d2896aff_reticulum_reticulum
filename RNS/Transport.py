@@ -202,6 +202,7 @@ class Transport:
     PR_VALUE                    = 19           # Default target stamp value for emitted path requests
     LR_COST                     = 11           # Default required link request cost if not explicitly announced or configured
     LINK_STAMP_TIMEOUT          = 15           # TODO: Provisional, set sensible default and wire to config
+    HOP_LIMITER                 = PATHFINDER_M # TODO: Locally configurable hop limiter, wire to config
 
     STAMPER_PR_QUEUE_LENGTH     = 32           # TODO: Provisional, wire to config handling
     STAMPER_AN_QUEUE_LENGTH     = 32           # TODO: Provisional, wire to config handling
@@ -1996,6 +1997,7 @@ class Transport:
 
         packet = RNS.Packet(None, raw)
         if not packet.unpack(): return interface.protocol_violation(f"Malformed packet ({len(raw)} bytes)") if interface else None
+        if not packet.hops < Transport.HOP_LIMITER: return interface.hop_limiter_hit()
         if not Transport.packet_filter(packet): return interface.packet_filter_hit()
         traffic_class = tc or Transport.TC_DATA
 

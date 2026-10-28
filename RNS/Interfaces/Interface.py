@@ -159,6 +159,7 @@ class Interface:
         self.protocol_violations = 0
         self.ifac_violations     = 0
         self.packet_filter_hits  = 0
+        self.hop_limiter_hits    = 0
         self.dp_ingress_tcount   = 0
         self.dp_ingress_bytes    = 0
         self.dp_ingress_packets  = 0
@@ -336,6 +337,10 @@ class Interface:
 
     def packet_filter_hit(self):
         self.packet_filter_hits += 1
+        return None
+
+    def hop_limiter_hit(self):
+        self.hop_limiter_hits += 1
         return None
 
     @property
