@@ -200,8 +200,8 @@ class Transport:
     DESTINATION_VALUE           = 23           # Default target stamp value for emitted announces
     PR_COST                     = 19           # Default required path request cost if no specifics configured or determined
     PR_VALUE                    = 19           # Default target stamp value for emitted path requests
-    LR_COST                     = 14           # Default required link request cost if not explicitly announced or configured
-    LINK_STAMP_TIMEOUT          = 16           # TODO: Provisional, set sensible default and wire to config
+    LR_COST                     = 11           # Default required link request cost if not explicitly announced or configured
+    LINK_STAMP_TIMEOUT          = 15           # TODO: Provisional, set sensible default and wire to config
 
     STAMPER_PR_QUEUE_LENGTH     = 32           # TODO: Provisional, wire to config handling
     STAMPER_AN_QUEUE_LENGTH     = 32           # TODO: Provisional, wire to config handling
