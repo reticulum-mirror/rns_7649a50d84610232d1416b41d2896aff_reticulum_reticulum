@@ -202,7 +202,7 @@ class Transport:
     PR_VALUE                    = 19           # Default target stamp value for emitted path requests
     LR_COST                     = 11           # Default required link request cost if not explicitly announced or configured
     LINK_STAMP_TIMEOUT          = 15           # Default link request stamp generation timeout
-    PR_STAMP_TIMEOUT            = 15           # Default path requset stamp generation timeout
+    PR_STAMP_TIMEOUT            = 15           # Default path request stamp generation timeout
     HOP_LIMITER                 = PATHFINDER_M
 
     STAMPER_PR_QUEUE_LENGTH     = 32           # TODO: Provisional, wire to config
