@@ -35,6 +35,7 @@ import os
 import sys
 import time
 import math
+import mmap
 import itertools
 import contextlib
 import multiprocessing
@@ -539,6 +540,97 @@ def job_android(stamp_cost, workblock, message_id, size, mode=MODE_STAMP):
             RNS.trace_exception(e)
 
     active_jobs.pop(message_id)
+
+    return stamp, total_rounds
+
+def job_android_persistent(stamp_cost, workblock, message_id, size, mode=MODE_STAMP):
+    stamp = None
+    start_time = time.time()
+    total_rounds = 0
+
+    use_nacl = False
+    try:
+        import nacl.encoding
+        import nacl.hash
+        use_nacl = True
+    except: pass
+
+    if use_nacl:
+        def full_hash(m): return nacl.hash.sha256(m, encoder=nacl.encoding.RawEncoder)
+    else:
+        def full_hash(m): return RNS.Identity.full_hash(m)
+
+    ctx = multiprocessing.get_context("fork")
+    wm = ctx.Manager()
+    try: jobs = len(os.sched_getaffinity(0))
+    except Exception: jobs = multiprocessing.cpu_count()
+
+    results_dict = wm.dict()
+    stop_flag = mmap.mmap(-1, 1, flags=mmap.MAP_SHARED | getattr(mmap, "MAP_ANONYMOUS", 0))
+    active_jobs[message_id] = False
+
+    RNS.log(f"Dispatching {jobs} workers for stamp generation...", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+
+    def job(worker_id):
+        rounds = 0
+        found_result = None
+        try:
+            target = 0b1<<256-stamp_cost
+            stop_check = lambda: stop_flag[0] != 0
+
+            if mode == MODE_STAMP: result, rounds, found = _loop_hash(workblock, target, size, stop_check, None, 0, full_hash)
+            else:                  result, rounds, found = _loop_key(workblock, target, stop_check, 0)
+
+            if found:
+                found_result = result
+                results_dict["found"] = [found_result, rounds]
+                stop_flag[0] = 1
+
+            results_dict[worker_id] = [found_result, rounds]
+
+        except Exception as e:
+            RNS.log(f"Stamp generation worker error: {e}", RNS.LOG_ERROR)
+            RNS.trace_exception(e)
+            try: results_dict[worker_id] = [None, rounds]
+            except Exception: pass
+
+    job_procs = []
+    try:
+        for pnum in range(jobs):
+            process = ctx.Process(target=job, kwargs={"worker_id": pnum}, daemon=True)
+            job_procs.append(process)
+            process.start()
+
+        last_progress = time.time()
+        while stamp == None and active_jobs.get(message_id) == False:
+            if "found" in results_dict: stamp = results_dict["found"][0]
+            if stamp == None:
+                if not any(p.is_alive() for p in job_procs): break
+
+                if time.time()-last_progress > 10:
+                    elapsed = max(time.time()-start_time, 1E-6)
+                    RNS.log(f"Stamp generation running, {RNS.prettyshorttime(elapsed)} elapsed", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+                    last_progress = time.time()
+
+                time.sleep(0.05)
+
+    finally:
+        stop_flag[0] = 1
+
+        for process in job_procs:
+            try: process.join(timeout=2)
+            except Exception: pass
+
+        for worker_id in list(results_dict.keys()):
+            try:
+                if worker_id == "found": continue
+                r = results_dict[worker_id]
+                if r != None: total_rounds += r[1]
+            except Exception: pass
+
+        active_jobs.pop(message_id, None)
+        try: wm.shutdown()
+        except Exception: pass
 
     return stamp, total_rounds
 
