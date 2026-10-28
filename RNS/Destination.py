@@ -162,6 +162,7 @@ class Destination:
         self.proof_strategy = Destination.PROVE_NONE
         self.stamp = None
         self.stamp_value = None
+        self._target_value = RNS.Transport.DESTINATION_VALUE
         self.link_cost = None
         self.ratchets = None
         self.ratchets_path = None
@@ -315,11 +316,11 @@ class Destination:
                         app_data = returned_app_data
 
             if RNS.Transport.STAMP_DESTINATIONS:
-                if self.stamp == None:
-                    stamp_entry = load_destination_stamp(self.hash, self.stamp_material(), RNS.Transport.DESTINATION_COST)
+                if self.stamp == None or self.stamp_value == None or self.stamp_value < self.target_value:
+                    stamp_entry = load_destination_stamp(self.hash, self.stamp_material(), self.target_value)
                     if stamp_entry != None: self.stamp, self.stamp_value = stamp_entry
                     else:
-                        stamp, stamp_value = generate_stamp(self.stamp_material(), stamp_cost=RNS.Transport.DESTINATION_VALUE,
+                        stamp, stamp_value = generate_stamp(self.stamp_material(), stamp_cost=self.target_value,
                                                             expand_rounds=0, size=RNS.Identity.STAMPLENGTH)
                         if stamp == None:
                             RNS.log(f"Could not generate destination stamp for {RNS.prettyhexrep(self.hash)}, announce emission cancelled", RNS.LOG_WARNING)
@@ -361,6 +362,18 @@ class Destination:
 
     def get_ext_flags(self):
         return 0x00
+
+    @property
+    def target_value(self):
+        return min(RNS.Transport.STAMP_COST_CAP, max(int(self._target_value), RNS.Transport.DESTINATION_VALUE))
+
+    def set_value(self, value):
+        """
+        Sets the target stamp value for this destination.
+
+        :param value: The target value as an *integer*.
+        """
+        self._target_value = min(RNS.Transport.STAMP_COST_CAP, max(int(value), RNS.Transport.DESTINATION_VALUE))
 
     def set_link_cost(self, cost):
         """

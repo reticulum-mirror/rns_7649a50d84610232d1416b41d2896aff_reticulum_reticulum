@@ -45,7 +45,7 @@ from threading import Lock, Condition
 from .vendor import umsgpack as umsgpack
 from RNS.Interfaces.BackboneInterface import BackboneInterface
 from RNS.Storage import AnnounceRateTable, PacketHashlist, AnnounceCache
-from RNS.Stamps import generate_stamp, stamp_workblock, stamp_valid, stamp_value
+from RNS.Stamps import generate_stamp, stamp_workblock, stamp_valid, stamp_value, cancel_work
 
 class InboundQueues:
     __slots__ = ("_cond", "_queues", "_sizes", "_dropped", "_hw_mark")
@@ -193,19 +193,20 @@ class Transport:
     LR_STAMPS_ENFORCED          = False        # Whether to enforce link request stamp requirements
     STAMP_DESTINATIONS          = False        # Whether to stamp destination announces emitted from this instance
     STAMP_PRS                   = False        # Whether to stamp path requests emitted from this instance
-    STAMP_LRS                   = True         # Whether to stamp link requests emitted from this instance
+    STAMP_LRS                   = False        # Whether to stamp link requests emitted from this instance
     STAMP_COST_CAP              = 100          # Global hard cap on stamp cost to ensure search-space viability at 14-byte stamp sizes
     LINK_COST_CAP               = 40           # Global hard cap on link request cost, separate from detached stamps
     DESTINATION_COST            = 23           # Default required announce cost if no specifics configured or determined
-    DESTINATION_VALUE           = 23           # Default target stamp value for emitted announces
+    DESTINATION_VALUE           = 25           # Default target stamp value for emitted announces
     PR_COST                     = 19           # Default required path request cost if no specifics configured or determined
     PR_VALUE                    = 19           # Default target stamp value for emitted path requests
     LR_COST                     = 11           # Default required link request cost if not explicitly announced or configured
-    LINK_STAMP_TIMEOUT          = 15           # TODO: Provisional, set sensible default and wire to config
-    HOP_LIMITER                 = PATHFINDER_M # TODO: Locally configurable hop limiter, wire to config
+    LINK_STAMP_TIMEOUT          = 15           # Default link request stamp generation timeout
+    PR_STAMP_TIMEOUT            = 15           # Default path requset stamp generation timeout
+    HOP_LIMITER                 = PATHFINDER_M
 
-    STAMPER_PR_QUEUE_LENGTH     = 32           # TODO: Provisional, wire to config handling
-    STAMPER_AN_QUEUE_LENGTH     = 32           # TODO: Provisional, wire to config handling
+    STAMPER_PR_QUEUE_LENGTH     = 32           # TODO: Provisional, wire to config
+    STAMPER_AN_QUEUE_LENGTH     = 32           # TODO: Provisional, wire to config
     STAMP_PR_PRIORITY           = 0
     STAMP_DST_PRIORITY          = 1
     stamper_thread              = None
@@ -516,6 +517,8 @@ class Transport:
 
         # Load transport-related data
         if not Transport.owner.is_connected_to_shared_instance: Transport.init_announce_cache()
+
+        if Transport.HOP_LIMITER != Transport.PATHFINDER_M: RNS.log(f"Transport hop limit set to {Transport.HOP_LIMITER}", RNS.LOG_VERBOSE)
 
         if RNS.Reticulum.transport_enabled():
             path_table_path = RNS.Reticulum.storagepath+"/destination_table"
@@ -3970,8 +3973,22 @@ class Transport:
 
         material = Transport.pr_stamp_material(destination_hash, request_tag)
         with Transport.pr_stamp_cache_lock: stamp = Transport.pr_stamp_cache.get(material, None)
-        if not stamp: stamp, value = generate_stamp(material, stamp_cost=Transport.PR_VALUE, expand_rounds=0, size=RNS.Identity.STAMPLENGTH)
+
         if not stamp:
+            stamp_status = None
+            stamp_job_id = material
+            def stamp_watchdog():
+                deadline = time.time() + RNS.Transport.PR_STAMP_TIMEOUT
+                while stamp_status == None and time.time() <= deadline: time.sleep(1)
+                if time.time() > deadline and stamp_job_id and not stamp_status: cancel_work(stamp_job_id)
+
+            threading.Thread(target=stamp_watchdog, daemon=True).start()
+            stamp, value = generate_stamp(material, stamp_cost=Transport.PR_VALUE, expand_rounds=0, size=RNS.Identity.STAMPLENGTH)
+            stamp_job_id = None
+
+        if stamp: stamp_status = True
+        else:
+            stamp_status = False
             RNS.log(f"Could not generate path request stamp for {RNS.prettyhexrep(destination_hash)}, path request emission cancelled", RNS.LOG_WARNING)
             return
 

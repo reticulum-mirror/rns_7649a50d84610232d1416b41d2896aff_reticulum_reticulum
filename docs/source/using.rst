@@ -193,12 +193,14 @@ change anything, and you may already be connected to a wider network. If not,
 you will probably need to add relevant *interfaces* to the configuration, in
 order to communicate with other systems.
 
-You can generate a much more verbose configuration example by running the command:
+The example above does not document all the available options, only the basics.
+To explore all the various configuration options available, you can generate a
+much more verbose and complete configuration example by running the command:
 
 ``rnsd --exampleconfig``
 
-The output includes examples for most interface types supported
-by Reticulum, along with additional options and configuration parameters.
+The output includes examples for most interface types supported by Reticulum,
+along with additional options and configuration parameters.
 
 It is a good idea to read the comments and explanations in the above default config.
 It will teach you the basic concepts you need to understand to configure your network.

@@ -471,6 +471,54 @@ class Reticulum:
                     value = self.config["logging"].as_bool(option)
                     RNS.logtimestamps = bool(value)
 
+        if "stamps" in self.config:
+            for option in self.config["stamps"]:
+                if option == "enforce_stamps":
+                    value = self.config["stamps"].as_bool(option)
+                    if value == True:
+                        RNS.Transport.STAMPS_ENFORCED = True
+                        RNS.Transport.LR_STAMPS_ENFORCED = True
+
+                if option == "stamp_destinations":
+                    value = self.config["stamps"].as_bool(option)
+                    if value == True: RNS.Transport.STAMP_DESTINATIONS = True
+
+                if option == "stamp_prs":
+                    value = self.config["stamps"].as_bool(option)
+                    if value == True: RNS.Transport.STAMP_PRS = True
+
+                if option == "stamp_lrs":
+                    value = self.config["stamps"].as_bool(option)
+                    if value == True: RNS.Transport.STAMP_LRS = True
+
+                if option == "destination_cost":
+                    v = self.config["stamps"].as_int(option)
+                    RNS.Transport.DESTINATION_COST = max(0, min(v, RNS.Transport.STAMP_COST_CAP))
+
+                if option == "destination_value":
+                    v = self.config["stamps"].as_int(option)
+                    RNS.Transport.DESTINATION_VALUE = max(0, min(v, RNS.Transport.STAMP_COST_CAP))
+
+                if option == "pr_cost":
+                    v = self.config["stamps"].as_int(option)
+                    RNS.Transport.PR_COST = max(0, min(v, RNS.Transport.STAMP_COST_CAP))
+
+                if option == "pr_value":
+                    v = self.config["stamps"].as_int(option)
+                    RNS.Transport.PR_VALUE = max(0, min(v, RNS.Transport.STAMP_COST_CAP))
+
+                if option == "lr_cost":
+                    v = self.config["stamps"].as_int(option)
+                    RNS.Transport.LR_COST = max(0, min(v, RNS.Transport.LINK_COST_CAP))
+
+                if option == "lr_stamp_timeout":
+                    v = self.config["stamps"].as_float(option)
+                    RNS.Transport.LINK_STAMP_TIMEOUT = max(0.020, v)
+
+                if option == "pr_stamp_timeout":
+                    v = self.config["stamps"].as_float(option)
+                    RNS.Transport.PR_STAMP_TIMEOUT = max(0.020, v)
+
         if "reticulum" in self.config:
             for option in self.config["reticulum"]:
                 value = self.config["reticulum"][option]
@@ -509,6 +557,10 @@ class Reticulum:
                 if option == "enable_transport":
                     v = self.config["reticulum"].as_bool(option)
                     if v == True: Reticulum.__transport_enabled = True
+
+                if option == "hop_limiter":
+                    v = self.config["reticulum"].as_int(option)
+                    RNS.Transport.HOP_LIMITER = max(1, min(v, RNS.Transport.PATHFINDER_M))
                 
                 if option == "static_transport_identity":
                     v = self.config["reticulum"].as_bool(option)
