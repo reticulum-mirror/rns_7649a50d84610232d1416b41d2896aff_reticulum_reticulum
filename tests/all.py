@@ -7,6 +7,10 @@ from .link import TestLink
 from .channel import TestChannel
 from .hkdf import TestHKDF
 from .ifac import TestIFAC
+from .stamps import TestStampFixedPoint
+from .stamps import TestStampWorkblock
+from .stamps import TestStampGeneration
+from .stamps import TestStampPersistence
 from .coalesced_transmit import TestTransmitBuffer
 from .hdlc import TestReceiveBuffer
 from .egress import TestHWMLimiter
