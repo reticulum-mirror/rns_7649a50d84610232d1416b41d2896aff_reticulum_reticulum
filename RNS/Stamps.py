@@ -809,6 +809,9 @@ def cost_from_fp(fp):
 def cost_from_bytes(b):
     return cost_from_fp(fp_from_bytes(b))
 
+def quantize_cost(cost):
+    return cost_from_fp(cost_to_fp(cost))
+
 def target_from_fp(fp):
     assert 0 <= fp <= RNS.Transport.STAMP_COST_CAP * COST_FP
     # Extract the integer and fractional parts

@@ -41,7 +41,7 @@ from .vendor import umsgpack as umsgpack
 from RNS.Cryptography import X25519PrivateKey, X25519PublicKey, Ed25519PrivateKey, Ed25519PublicKey
 from RNS.Cryptography import Token
 from RNS.Storage import KnownDestinationsStore
-from RNS.Stamps import stamp_workblock, stamp_valid, stamp_value, generate_stamped_key
+from RNS.Stamps import stamp_workblock, stamp_valid, stamp_value, generate_stamped_key, cost_from_bytes
 
 
 class Identity:
@@ -84,7 +84,7 @@ class Identity:
     SIGLENGTH                 = KEYSIZE     # In bits
     STAMPLENGTH               = 14          # In bytes
     EXTHEADERLENGTH           = 2           # In bytes
-    LRCOSTLENGTH              = 1           # In bytes
+    LRCOSTLENGTH              = 2           # In bytes
     EXTPAYLOADLENGTH          = EXTHEADERLENGTH+STAMPLENGTH+LRCOSTLENGTH
     EXTPAYLOADMARKER          = 0xC1 # Never used at msgpack object boundaries
 
@@ -191,7 +191,7 @@ class Identity:
         Recall last heard announce stamp value for a destination hash.
 
         :param destination_hash: Destination hash as *bytes*.
-        :returns: *Integer*, or *None* if the destination is unknown.
+        :returns: *Float*, or *None* if the destination is unknown.
         """
         known_destination = Identity.known_destinations.get(destination_hash)
         if not known_destination: return None
@@ -203,7 +203,7 @@ class Identity:
         Recall the link request stamp cost announced by a destination.
 
         :param destination_hash: Destination hash as *bytes*.
-        :returns: *Integer*, or *None* if the destination is unknown or has not announced a cost.
+        :returns: *Float*, or *None* if the destination is unknown or has not announced a cost.
         """
         known_destination = Identity.known_destinations.get(destination_hash)
         if not known_destination: return None
@@ -724,21 +724,19 @@ class Identity:
                     ext_flags   = ext_header[1] # Reserved for future extensions
                     ext_anchor  = ext_payload[-1]
 
-                    # The trailing anchor byte carries the announced link request stamp
-                    # cost in its 7 least significant bits, and an extension marker in
-                    # its most significant bit. If the extension marker is set, the
-                    # ext_payload is of a newer and potentially longer format, parsed
-                    # through versioned logic not yet implemented in this version, and
-                    # must not be interpreted here. As long as announced costs cannot
-                    # exceed STAMP_COST_CAP, valid announce ext_payloads will always
-                    # present with the extension marker cleared.
-                    ext_extended = (ext_anchor & 0x80) != 0
-                    ext_lr_cost  = ext_anchor & 0x7F
-                    known_format = (not ext_extended) and (ext_lr_cost <= RNS.Transport.STAMP_COST_CAP)
+                    # The ext_anchor carries the lr_cost integer part, and a
+                    # reserved flag in the MSB. The fractional part of the
+                    # lr_cost is stored in the immediately preceding byte.
+                    ext_extended  = (ext_anchor & 0x80) != 0
+                    ext_lr_cost_i = ext_anchor & 0x7F
+                    ext_lr_cost_m = ext_payload[-2]
+                    cost_bytes    = bytes([ext_lr_cost_i, ext_lr_cost_m])
+                    ext_lr_cost   = cost_from_bytes(cost_bytes)
+                    known_format  = (not ext_extended) and (ext_lr_cost <= RNS.Transport.STAMP_COST_CAP)
 
                     if (not ext_header[0] == Identity.EXTPAYLOADMARKER) or (not known_format): dst_stamped = False
                     else:
-                        # RNS.log(f"Checking potential stamp in announce with app_data len {len(app_data)} for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) # TODO: Remove
+                        # RNS.log(f"Checking potential stamp in announce with app_data len {len(app_data)} for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) # TODO: Remove after 1.6.1
                         dst_stamped = True
                         try:
                             stamp    = ext_payload[Identity.EXTHEADERLENGTH:Identity.EXTHEADERLENGTH+Identity.STAMPLENGTH]
@@ -983,7 +981,7 @@ class Identity:
 
     def get_value(self):
         """
-        :returns: The stamp value of this identity as an *integer*
+        :returns: The stamp value of this identity as a *float*
         """
         if not self.get_public_key(): return None
         else:                         return stamp_value(self.sig_pub_bytes, self.pub_bytes)

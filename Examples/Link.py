@@ -43,7 +43,7 @@ def server(configpath):
     )
 
     # We can optionally configure a link request stamp cost
-    server_destination.set_link_cost(14)
+    server_destination.set_link_cost(14.2)
 
     # We configure a function that will get called every time
     # a new client creates a link to this destination.

@@ -330,7 +330,6 @@ class InterfaceAnnounceHandler:
                     self.invalid_cache.append(fullhash)
                     return
 
-                if value < self.required_value: RNS.log(f"Ignored discovered interface with stamp value {value}", RNS.LOG_DEBUG)
                 else:
                     info     = None
                     unpacked = msgpack.unpackb(packed)

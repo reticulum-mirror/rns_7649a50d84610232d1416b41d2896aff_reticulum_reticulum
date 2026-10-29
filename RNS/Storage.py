@@ -253,8 +253,8 @@ class KnownDestinationsStore:
             app_data         BLOB,
             used             REAL NOT NULL DEFAULT 0,
             stamp            BLOB,
-            stamp_value      INTEGER,
-            lr_cost          INTEGER,
+            stamp_value      REAL,
+            lr_cost          REAL,
             identity_hash    BLOB NOT NULL)""")
 
         self._conn.execute("""CREATE TABLE IF NOT EXISTS ratchets (
@@ -262,7 +262,7 @@ class KnownDestinationsStore:
             ratchet          BLOB NOT NULL,
             received         REAL NOT NULL)""")
 
-        if 0 < db_version < 2: self._conn.execute("ALTER TABLE known_destinations ADD COLUMN lr_cost INTEGER")
+        if 0 < db_version < 2: self._conn.execute("ALTER TABLE known_destinations ADD COLUMN lr_cost REAL")
 
         self._conn.execute("PRAGMA user_version = 2")
         self._conn.commit()

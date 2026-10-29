@@ -192,8 +192,7 @@ class Link:
                 stamp_material     = owner.hash + peer_sig_pub_bytes
                 value              = stamp_value(stamp_material, peer_pub_bytes)
 
-                RNS.log(f"Incoming LR value: {value}", RNS.LOG_DEBUG) # TODO: Remove
-                if RNS.Transport.LR_STAMPS_ENFORCED and value < owner.get_link_cost(): raise ValueError(f"Insufficient link request stamp value {value}")
+                if RNS.Transport.LR_STAMPS_ENFORCED and stamp_valid(peer_pub_bytes, owner.get_link_cost(), stamp_material): raise ValueError(f"Insufficient link request stamp value {value}")
 
                 link = Link(owner=owner, peer_pub_bytes=peer_pub_bytes, peer_sig_pub_bytes=peer_sig_pub_bytes)
                 link.set_link_id(packet)
@@ -322,8 +321,6 @@ class Link:
             self.sig_pub       = self.sig_prv.public_key()
             self.sig_pub_bytes = self.sig_pub.public_bytes()
 
-        else: RNS.log(f"Stamped link request, deferring key generation", RNS.LOG_DEBUG) # TODO: Remove
-
         if peer_pub_bytes == None:
             self.peer_pub       = None
             self.peer_pub_bytes = None
@@ -360,7 +357,7 @@ class Link:
                 self.sig_pub_bytes  = self.sig_pub.public_bytes()
                 self.stamp_material = self.destination.hash + self.sig_pub_bytes
 
-                RNS.log(f"Starting stamp generation for link request to {self.destination}", RNS.LOG_DEBUG) # TODO: Remove
+                RNS.log(f"Starting stamp generation for link request to {self.destination}", RNS.LOG_DEBUG)
                 self.stamp_job_id = self.stamp_material
                 threading.Thread(target=stamp_watchdog, daemon=True).start()
                 stamped_key, v = generate_stamped_key(material=self.stamp_material, stamp_cost=self.stamp_cost)
@@ -396,9 +393,8 @@ class Link:
         nh_hw_mtu = RNS.Transport.next_hop_interface_hw_mtu(self.destination.hash)
         if RNS.Reticulum.link_mtu_discovery() and nh_hw_mtu:
             signalling_bytes = Link.signalling_bytes(nh_hw_mtu, self.mode)
-            RNS.log(f"Signalling link MTU of {RNS.prettysize(nh_hw_mtu)} for link", RNS.LOG_DEBUG) # TODO: Remove debug
+            RNS.log(f"Signalling link MTU of {RNS.prettysize(nh_hw_mtu)} for link", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
         else: signalling_bytes = Link.signalling_bytes(RNS.Reticulum.MTU, self.mode)
-        RNS.log(f"Establishing link with mode {Link.MODE_DESCRIPTIONS[self.mode]}", RNS.LOG_DEBUG) # TODO: Remove debug
         request_data = self.pub_bytes+self.sig_pub_bytes+signalling_bytes
         self.packet = RNS.Packet(self.destination, request_data, packet_type=RNS.Packet.LINKREQUEST)
         self.packet.pack()

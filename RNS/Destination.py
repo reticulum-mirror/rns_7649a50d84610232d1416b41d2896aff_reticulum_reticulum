@@ -36,6 +36,7 @@ import RNS
 
 from RNS.Cryptography import Token
 from RNS.Stamps import generate_stamp, store_destination_stamp, load_destination_stamp
+from RNS.Stamps import cost_to_bytes, quantize_cost
 from .vendor import umsgpack as umsgpack
 
 class Callbacks:
@@ -163,7 +164,7 @@ class Destination:
         self.stamp = None
         self.stamp_value = None
         self._target_value = RNS.Transport.DESTINATION_VALUE
-        self.link_cost = None
+        self._link_cost = None
         self.ratchets = None
         self.ratchets_path = None
         self.ratchet_interval = Destination.RATCHET_INTERVAL
@@ -316,7 +317,7 @@ class Destination:
                         app_data = returned_app_data
 
             if RNS.Transport.STAMP_DESTINATIONS:
-                if self.stamp == None or self.stamp_value == None or self.stamp_value < self.target_value:
+                if self.stamp == None or self.stamp_value == None or self.stamp_value < quantize_cost(self.target_value):
                     stamp_entry = load_destination_stamp(self.hash, self.stamp_material(), self.target_value)
                     if stamp_entry != None: self.stamp, self.stamp_value = stamp_entry
                     else:
@@ -331,7 +332,9 @@ class Destination:
                         store_destination_stamp(self.hash, stamp, stamp_value)
                         RNS.log(f"Generated and persisted stamp with value {self.stamp_value} for {self}", RNS.LOG_DEBUG)
 
-                ext_payload = bytes([RNS.Identity.EXTPAYLOADMARKER, self.get_ext_flags()])+self.stamp+bytes([self.get_link_cost()])
+                cost_bytes  = cost_to_bytes(self.get_link_cost())
+                ext_payload = bytes([RNS.Identity.EXTPAYLOADMARKER, self.get_ext_flags()])+self.stamp+bytes([cost_bytes[1], cost_bytes[0]])
+
                 if app_data == None: app_data = ext_payload
                 else:                app_data = app_data+ext_payload
             
@@ -365,35 +368,35 @@ class Destination:
 
     @property
     def target_value(self):
-        return min(RNS.Transport.STAMP_COST_CAP, max(int(self._target_value), RNS.Transport.DESTINATION_VALUE))
+        return min(RNS.Transport.STAMP_COST_CAP, max(float(self._target_value), RNS.Transport.DESTINATION_VALUE))
 
     def set_value(self, value):
         """
         Sets the target stamp value for this destination.
 
-        :param value: The target value as an *integer*.
+        :param value: The target value as a *float*.
         """
-        self._target_value = min(RNS.Transport.STAMP_COST_CAP, max(int(value), RNS.Transport.DESTINATION_VALUE))
+        self._target_value = min(RNS.Transport.STAMP_COST_CAP, max(float(value), RNS.Transport.DESTINATION_VALUE))
 
     def set_link_cost(self, cost):
         """
         Sets the required link establishment stamp cost for this destination. Set to 0 to disable.
 
-        :param cost: The required cost as an *integer*.
+        :param cost: The required cost as a *float*.
         """
-        self.link_cost = max(0, min(int(cost), RNS.Transport.LINK_COST_CAP))
+        self._link_cost = max(0, min(float(cost), RNS.Transport.LINK_COST_CAP))
 
     def get_link_cost(self):
         """
         Returns the link request stamp cost to be announced for this
-        destination, as an integer. If no destination-specific cost has
+        destination, as a float. If no destination-specific cost has
         been set, the default link request cost is returned.
 
-        :returns: The announced link request cost as an *integer*.
+        :returns: The announced link request cost as a *float*.
         """
-        cost = self.link_cost
+        cost = self._link_cost
         if cost == None: cost = RNS.Transport.LR_COST
-        return max(0, min(int(cost), RNS.Transport.STAMP_COST_CAP))
+        return max(0.0, min(float(cost), RNS.Transport.STAMP_COST_CAP))
 
     def accepts_links(self, accepts = None):
         """

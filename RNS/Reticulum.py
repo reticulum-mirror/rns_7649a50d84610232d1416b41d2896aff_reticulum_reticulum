@@ -492,23 +492,23 @@ class Reticulum:
                     if value == True: RNS.Transport.ALWAYS_STAMP_LRS = True
 
                 if option == "destination_cost":
-                    v = self.config["stamps"].as_int(option)
+                    v = self.config["stamps"].as_float(option)
                     RNS.Transport.DESTINATION_COST = max(0, min(v, RNS.Transport.STAMP_COST_CAP))
 
                 if option == "destination_value":
-                    v = self.config["stamps"].as_int(option)
+                    v = self.config["stamps"].as_float(option)
                     RNS.Transport.DESTINATION_VALUE = max(0, min(v, RNS.Transport.STAMP_COST_CAP))
 
                 if option == "pr_cost":
-                    v = self.config["stamps"].as_int(option)
+                    v = self.config["stamps"].as_float(option)
                     RNS.Transport.PR_COST = max(0, min(v, RNS.Transport.STAMP_COST_CAP))
 
                 if option == "pr_value":
-                    v = self.config["stamps"].as_int(option)
+                    v = self.config["stamps"].as_float(option)
                     RNS.Transport.PR_VALUE = max(0, min(v, RNS.Transport.STAMP_COST_CAP))
 
                 if option == "lr_cost":
-                    v = self.config["stamps"].as_int(option)
+                    v = self.config["stamps"].as_float(option)
                     RNS.Transport.LR_COST = max(0, min(v, RNS.Transport.LINK_COST_CAP))
 
                 if option == "lr_stamp_timeout":
@@ -645,7 +645,7 @@ class Reticulum:
                     if v == False: Reticulum.__discover_interfaces = False
                 
                 if option == "required_discovery_value":
-                    v = self.config["reticulum"].as_int(option)
+                    v = self.config["reticulum"].as_float(option)
                     if v > 0: Reticulum.__required_discovery_value = v
                     else:     Reticulum.__required_discovery_value = None
                 
@@ -1050,7 +1050,7 @@ class Reticulum:
                     if discovery_announce_interval < 5*60: discovery_announce_interval = 5*60
 
                 if discovery_announce_interval == None: discovery_announce_interval = 6*60*60
-                if "discovery_stamp_value" in c: discovery_stamp_value = c.as_int("discovery_stamp_value")
+                if "discovery_stamp_value" in c: discovery_stamp_value = c.as_float("discovery_stamp_value")
                 if "discovery_name" in c: discovery_name = c["discovery_name"]
                 if "discovery_encrypt" in c: discovery_encrypt = c.as_bool("discovery_encrypt")
                 if "reachable_on" in c: reachable_on = c["reachable_on"]
@@ -2182,7 +2182,7 @@ class Reticulum:
         Returns the required stamp value for a discovered interface
         to be considered valid and remembered.
 
-        :returns: The required stamp value as an integer.
+        :returns: The required stamp value as a float.
         """
         return Reticulum.__required_discovery_value
 
