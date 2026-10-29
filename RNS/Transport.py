@@ -2082,24 +2082,25 @@ class Transport:
                                 stamp = ext_payload[Transport.PR_EXT_HEADERLENGTH:]
                                 stamp_ok = Transport.validate_pr_stamp(stamp, destination_hash, tag_bytes)
 
-                                # TODO: Remove debug block #############
+                                # TODO: Remove debug block #################################################
                                 dval = None
-                                if RNS.sl(RNS.LOG_DEBUG):
+                                if RNS.sl(RNS.LOG_PATHING):
                                     workblock = stamp_workblock(Transport.pr_stamp_material(destination_hash, tag_bytes), expand_rounds=0) # TODO: Remove
-                                    dval = stamp_value(workblock, ext_payload[Transport.PR_EXT_HEADERLENGTH:]) # TODO: Remove
-                                    RNS.log(f"Stamped path request for {RNS.prettyhexrep(destination_hash)} with value {dval}", RNS.LOG_DEBUG)
-                                ########################################
+                                    dval = stamp_value(workblock, ext_payload[Transport.PR_EXT_HEADERLENGTH:])
+                                    if not ext_payload[1] == 0xFF: RNS.log(f"Stamped path request for {RNS.prettyhexrep(destination_hash)} with value {dval}", RNS.LOG_PATHING)
+                                    else:                          RNS.log(f"Lenient-relayed path request for {RNS.prettyhexrep(destination_hash)} with value {dval}", RNS.LOG_PATHING)
+                                ############################################################################
 
                                 if not stamp_ok:
                                     if ext_payload[1] == 0xFF: RNS.log(f"Unstamped relayed path request from stamp-aware node for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None # TODO: Remove this transitory diagnostics check once enforcement is enabled
                                     # else: RNS.log(f"Invalid or insufficient path request stamp for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
-                                    # TODO: Reset to collapsed LOG_EXTREME message commented out above #####
+                                    # TODO: Reset else block to collapsed LOG_EXTREME message commented out above #####
                                     else:
-                                        if RNS.sl(RNS.LOG_DEBUG):
-                                            if dval: RNS.log(f"Invalid or insufficient (v:{dval}) path request stamp for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
-                                            else:    RNS.log(f"Invalid or insufficient path request stamp for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+                                        if RNS.sl(RNS.LOG_PATHING):
+                                            if dval: RNS.log(f"Invalid or insufficient (v:{dval}) path request stamp for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
+                                            else:    RNS.log(f"Invalid or insufficient path request stamp for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
                                     ########################################################################
-                            else: RNS.log(f"Unrecognized stamp payload in path request for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None # TODO: Reset level
+                            else: RNS.log(f"Unrecognized stamp payload in path request for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
                         else: RNS.log(f"Unstamped path request for {RNS.prettyhexrep(destination_hash)}", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None # TODO: Remove after transition, simply drop
 
                         if not stamp_ok:
