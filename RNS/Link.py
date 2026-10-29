@@ -308,7 +308,8 @@ class Link:
             self.expected_hops = RNS.Transport.hops_to(self.destination.hash)
             self.establishment_timeout  = RNS.Reticulum.get_instance().get_first_hop_timeout(self.destination.hash)
             self.establishment_timeout += Link.ESTABLISHMENT_TIMEOUT_PER_HOP * max(1, RNS.Transport.hops_to(self.destination.hash))
-            self.stamp_cost = RNS.Identity.recall_link_cost(self.destination.hash) or RNS.Transport.LR_COST if RNS.Transport.ALWAYS_STAMP_LRS else None
+            self.stamp_cost = RNS.Identity.recall_link_cost(self.destination.hash)
+            if self.stamp_cost == None and RNS.Transport.ALWAYS_STAMP_LRS: self.stamp_cost = RNS.Transport.LR_COST
 
             if self.stamp_cost and RNS.Transport.STAMP_LRS: self.__defer_keys = True
             else:
