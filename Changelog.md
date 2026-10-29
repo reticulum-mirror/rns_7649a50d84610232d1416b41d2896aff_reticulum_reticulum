@@ -12,6 +12,7 @@
 - Added managed storage for cached announces
 - Added more comprehensive metrics to status output structure
 - Added heap-tracking memory management
+- Added `hop_limiter` configuration option
 - Optimized announce rate table implementation
 - Optimized packet filter hashlist implementation
 - Fixed `RNodeInterface` phy stats regression on Android
