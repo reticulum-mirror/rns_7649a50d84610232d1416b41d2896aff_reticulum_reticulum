@@ -314,14 +314,15 @@ instance_name = default
 # and enforcement. RNS 1.6.0 includes all the required stamp
 # generation and verification functionality, and actively
 # validates stamps, while leaving generation, emission and
-# enforcement disabled by default. Version 1.6.1 will enable
-# generation and emission by default, and version 1.6.2 will
-# finally activate enforcement. Any option can be enabled
-# early by configuration.
+# enforcement disabled by default for destinations and PRs.
+# Link requests will be stamped already from 1.6.0 if a cost
+# has been announced by the destination. Version 1.6.1 will
+# enable generation and emission by default, and version
+# 1.6.2 will finally activate enforcement. Any of these
+# options can be enabled early by configuration:
 
 # stamp_destinations = yes
 # stamp_prs = yes
-# stamp_lrs = yes
 # enforce_stamps = yes
 
 

@@ -487,9 +487,9 @@ class Reticulum:
                     value = self.config["stamps"].as_bool(option)
                     if value == True: RNS.Transport.STAMP_PRS = True
 
-                if option == "stamp_lrs":
+                if option == "always_stamp_lrs":
                     value = self.config["stamps"].as_bool(option)
-                    if value == True: RNS.Transport.STAMP_LRS = True
+                    if value == True: RNS.Transport.ALWAYS_STAMP_LRS = True
 
                 if option == "destination_cost":
                     v = self.config["stamps"].as_int(option)

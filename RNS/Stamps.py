@@ -259,9 +259,9 @@ def generate_stamp(message_id, stamp_cost, expand_rounds=WORKBLOCK_EXPAND_ROUNDS
 
     stamp_cost = cost_to_fp(stamp_cost)
     start_time = time.time()
-    stamp = None
-    rounds = 0
-    value = 0
+    stamp      = None
+    value      = None
+    rounds     = 0
 
     if RNS.vendor.platformutils.is_windows() or RNS.vendor.platformutils.is_darwin():
         RNS.log(f"Multi-core stamp generation on this platform is not supported, work limited to single CPU core.", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
@@ -276,7 +276,8 @@ def generate_stamp(message_id, stamp_cost, expand_rounds=WORKBLOCK_EXPAND_ROUNDS
     speed = rounds/duration
     if stamp != None: value = stamp_value(workblock, stamp)
 
-    RNS.log(f"Stamp with value {value} generated in {RNS.prettytime(duration)}, {rounds} rounds, {RNS.prettysize(speed, suffix='rps')}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+    if value != None: RNS.log(f"Stamp with value {value} generated in {RNS.prettytime(duration)}, {rounds} rounds, {RNS.prettysize(speed, suffix='rps')}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+    else: RNS.log(f"Stamp generation aborted or failed after {RNS.prettytime(duration)}, {rounds} rounds", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
 
     return stamp, value
 
@@ -322,8 +323,8 @@ def generate_stamped_key(material, stamp_cost):
     stamp_cost = cost_to_fp(stamp_cost)
     start_time = time.time()
     keypair    = None
+    value      = None
     rounds     = 0
-    value      = 0
 
     if RNS.vendor.platformutils.is_windows() or RNS.vendor.platformutils.is_darwin():
         RNS.log(f"Multi-core stamp generation on this platform is not supported, work limited to single CPU core.", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
@@ -338,7 +339,8 @@ def generate_stamped_key(material, stamp_cost):
     speed = rounds/duration
     if keypair != None: value = stamp_value(material, keypair[1])
 
-    RNS.log(f"Stamped key with value {value} generated in {RNS.prettyshorttime(duration)}, {rounds} rounds, {RNS.prettysize(speed, suffix='rps')}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+    if value != None: RNS.log(f"Stamped key with value {value} generated in {RNS.prettyshorttime(duration)}, {rounds} rounds, {RNS.prettysize(speed, suffix='rps')}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+    else: RNS.log(f"Stamp generation aborted or failed after {RNS.prettytime(duration)}, {rounds} rounds", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
 
     return keypair, value
 
