@@ -195,8 +195,8 @@ class Transport:
     STAMP_PRS                   = False        # Whether to stamp path requests emitted from this instance
     STAMP_LRS                   = True         # Whether to stamp link requests emitted from this instance
     ALWAYS_STAMP_LRS            = False        # Whether to stamp link requests even when no link cost is announced
-    STAMP_COST_CAP              = 100.0        # Global hard cap on stamp cost to ensure search-space viability at 14-byte stamp sizes
-    LINK_COST_CAP               = 40.0         # Global hard cap on link request cost, separate from detached stamps
+    STAMP_COST_CAP              = 100          # Global hard cap on stamp cost to ensure search-space viability at 14-byte stamp sizes
+    LINK_COST_CAP               = 40           # Global hard cap on link request cost, separate from detached stamps
     DESTINATION_COST            = 23.5         # Default required announce cost if no specifics configured or determined
     DESTINATION_VALUE           = 25.0         # Default target stamp value for emitted announces
     PR_COST                     = 19.8         # Default required path request cost if no specifics configured or determined
