@@ -1392,7 +1392,7 @@ class Link:
         if len(self.outgoing_resources) > 0: return False
         else:                                return True
 
-    def __str__(self): return RNS.prettyhexrep(self.link_id)
+    def __str__(self): return RNS.prettyhexrep(self.link_id) if self.link_id else "<pending link>"
 
 
 class RequestReceipt():
