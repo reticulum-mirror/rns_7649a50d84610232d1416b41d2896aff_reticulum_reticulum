@@ -92,6 +92,7 @@ def resource_concluded(resource):
     if resource.status == RNS.Resource.COMPLETE:
         RNS.log(f"Resource {resource} received")
         RNS.log(f"Metadata: {resource.metadata}")
+        RNS.log(f"Application flag is {'set' if resource.app_flag else 'not set'}")
         RNS.log(f"Data length: {os.stat(resource.data.name).st_size}")
         RNS.log(f"Data can be read directly from: {resource.data}")
         RNS.log(f"Data can be moved or copied from: {resource.data.name}")
@@ -192,16 +193,22 @@ def client_loop():
                 RNS.log(f"First 32 bytes of data: {RNS.hexrep(data[:32])}")
                 
                 # Generate some metadata
-                metadata = {"text": random_text_generator(), "numbers": [1,2,3,4], "blob": os.urandom(16)}
+                metadata = {"text": random_text_generator(),
+                            "numbers": [1,2,3,4], "blob": os.urandom(16)}
+
+                # An optional application-specific flag can be set
+                flag_set = True
                 
                 # Send the resource
-                resource = RNS.Resource(data, server_link, metadata=metadata, callback=resource_concluded_sending, auto_compress=False)
+                resource = RNS.Resource(data, server_link, metadata=metadata, app_flag=flag_set,
+                                        callback=resource_concluded_sending, auto_compress=False)
 
                 # Alternatively, you can stream data
                 # directly from an open file descriptor
 
                 # with open("/path/to/file", "rb") as data_file:
-                #     resource = RNS.Resource(data_file, server_link, metadata=metadata, callback=resource_concluded_sending, auto_compress=False)
+                #     resource = RNS.Resource(data_file, server_link, metadata=metadata,
+                #                             callback=resource_concluded_sending, auto_compress=False)
 
         except Exception as e:
             RNS.log("Error while sending resource over the link: "+str(e))

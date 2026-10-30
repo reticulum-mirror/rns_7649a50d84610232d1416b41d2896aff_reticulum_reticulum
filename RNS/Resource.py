@@ -139,6 +139,7 @@ class Resource:
 
     HASHMAP_IS_NOT_EXHAUSTED = 0x00
     HASHMAP_IS_EXHAUSTED = 0xFF
+    HASHMAP_IS_EMPTY = 0xFE
 
     # Status constants
     NONE            = 0x00
@@ -182,6 +183,7 @@ class Resource:
             resource.hashmap_raw          = adv.m
             resource.encrypted            = True if resource.flags & 0x01 else False
             resource.compressed           = True if resource.flags >> 1 & 0x01 else False
+            resource.app_flag             = True if resource.flags >> 6 & 0x01 else False
             resource.initiator            = False
             resource.callback             = callback
             resource.__progress_callback  = progress_callback
@@ -247,7 +249,7 @@ class Resource:
     # The data passed can be either a bytes-array or a file opened
     # in binary read mode.
     def __init__(self, data, link, metadata=None, advertise=True, auto_compress=True, callback=None, progress_callback=None,
-                 timeout = None, segment_index = 1, original_hash = None, request_id = None, is_response = False, sent_metadata_size=0):
+                 timeout=None, segment_index = 1, original_hash=None, request_id=None, is_response=False, app_flag=False, sent_metadata_size=0):
         
         data_size = None
         resource_data = None
@@ -257,6 +259,7 @@ class Resource:
         self.metadata = None
         self.has_metadata = False
         self.metadata_size = sent_metadata_size
+        self.app_flag = app_flag
 
         if metadata != None:
             packed_metadata = umsgpack.packb(metadata)
@@ -503,11 +506,12 @@ class Resource:
                 if self.hashmap[i+segment*seg_len] == None: self.hashmap_height += 1
                 self.hashmap[i+segment*seg_len] = hashmap[i*Resource.MAPHASH_LEN:(i+1)*Resource.MAPHASH_LEN]
 
-            if hashes < 1:
+            if hashes < 1 and segment != 0:
                 RNS.log("Invalid HMU received, cancelling transfer", RNS.LOG_ERROR)
                 self.cancel()
 
             else:
+                if hashes == 0 and segment == 0: RNS.log(f"Received HMU-less resource advertisement, requesting initial hashmap", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
                 self.waiting_for_hmu = False
                 self.request_next()
 
@@ -535,7 +539,7 @@ class Resource:
         else: return True
 
     def __advertise_job(self):
-        self.advertisement_packet = RNS.Packet(self.link, ResourceAdvertisement(self).pack(), context=RNS.Packet.RESOURCE_ADV)
+        self.advertisement_packet = RNS.Packet(self.link, ResourceAdvertisement(self, mdu=self.link.mdu).pack(), context=RNS.Packet.RESOURCE_ADV)
         while not self.link.ready_for_new_resource():
             self.status = Resource.QUEUED
             sleep(0.25)
@@ -594,7 +598,7 @@ class Resource:
                             RNS.log("No part requests received, retrying resource advertisement...", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
                             self.retries_left -= 1
                             if not self.ensure_link(): return
-                            self.advertisement_packet = RNS.Packet(self.link, ResourceAdvertisement(self).pack(), context=RNS.Packet.RESOURCE_ADV)
+                            self.advertisement_packet = RNS.Packet(self.link, ResourceAdvertisement(self, mdu=self.link.mdu).pack(), context=RNS.Packet.RESOURCE_ADV)
                             self.advertisement_packet.send()
                             self.last_activity = time.time()
                             self.adv_sent = self.last_activity
@@ -789,6 +793,7 @@ class Resource:
                                      is_response = self.is_response,
                                      advertise = False,
                                      auto_compress = self.auto_compress_option,
+                                     app_flag = self.app_flag,
                                      sent_metadata_size = self.metadata_size)
         
         if self.__progress_callback: self.next_segment.progress_callback(self.__progress_callback)
@@ -949,28 +954,38 @@ class Resource:
                 hashmap_exhausted = Resource.HASHMAP_IS_NOT_EXHAUSTED
                 requested_hashes = b""
 
-                i = 0; pn = self.consecutive_completed_height+1
-                search_start = pn
-                search_size = self.window
-                
-                for part in self.parts[search_start:search_start+search_size]:
-                    if part == None:
-                        part_hash = self.hashmap[pn]
-                        if part_hash != None:
-                            requested_hashes += part_hash
-                            self.outstanding_parts += 1
-                            i += 1
-                        else:
-                            hashmap_exhausted = Resource.HASHMAP_IS_EXHAUSTED
+                # Initial advertisement-carried hashmap was empty,
+                # we can't request any real parts, and need an
+                # actual hashmap update first
+                if self.hashmap[0] == None:
+                    hashmap_exhausted = Resource.HASHMAP_IS_EMPTY
 
-                    pn += 1
-                    if i >= self.window or hashmap_exhausted == Resource.HASHMAP_IS_EXHAUSTED:
-                        break
+                else:
+                    i = 0; pn = self.consecutive_completed_height+1
+                    search_start = pn
+                    search_size = self.window
+
+                    for part in self.parts[search_start:search_start+search_size]:
+                        if part == None:
+                            part_hash = self.hashmap[pn]
+                            if part_hash != None:
+                                requested_hashes += part_hash
+                                self.outstanding_parts += 1
+                                i += 1
+                            else:
+                                hashmap_exhausted = Resource.HASHMAP_IS_EXHAUSTED
+
+                        pn += 1
+                        if i >= self.window or hashmap_exhausted == Resource.HASHMAP_IS_EXHAUSTED:
+                            break
 
                 hmu_part = bytes([hashmap_exhausted])
                 if hashmap_exhausted == Resource.HASHMAP_IS_EXHAUSTED:
                     last_map_hash = self.hashmap[self.hashmap_height-1]
                     hmu_part += last_map_hash
+                    self.waiting_for_hmu = True
+
+                if hashmap_exhausted == Resource.HASHMAP_IS_EMPTY:
                     self.waiting_for_hmu = True
 
                 request_data = hmu_part + self.hash + requested_hashes
@@ -1003,8 +1018,16 @@ class Resource:
 
             self.retries_left = self.max_retries
 
-            wants_more_hashmap = True if request_data[0] == Resource.HASHMAP_IS_EXHAUSTED else False
-            pad = 1+Resource.MAPHASH_LEN if wants_more_hashmap else 1
+            pad = 1
+            hashmap_is_empty = False
+            wants_more_hashmap = False
+            if request_data[0] == Resource.HASHMAP_IS_EMPTY:
+                wants_more_hashmap = True
+                hashmap_is_empty = True
+
+            if request_data[0] == Resource.HASHMAP_IS_EXHAUSTED:
+                wants_more_hashmap = True
+                pad += Resource.MAPHASH_LEN
 
             requested_hashes = request_data[pad+RNS.Identity.HASHLENGTH//8:]
 
@@ -1040,15 +1063,15 @@ class Resource:
                 last_map_hash = request_data[1:Resource.MAPHASH_LEN+1]
                 
                 part_index   = self.receiver_min_consecutive_height
-                search_start = part_index
-                search_end   = self.receiver_min_consecutive_height+ResourceAdvertisement.COLLISION_GUARD_SIZE
+                search_start = part_index if not hashmap_is_empty else 0
+                search_end   = self.receiver_min_consecutive_height+ResourceAdvertisement.COLLISION_GUARD_SIZE if not hashmap_is_empty else 0
                 for part in self.parts[search_start:search_end]:
                     part_index += 1
                     if part.map_hash == last_map_hash: break
 
                 self.receiver_min_consecutive_height = max(part_index-1-Resource.WINDOW_MAX, 0)
 
-                if part_index % ResourceAdvertisement.HASHMAP_MAX_LEN != 0:
+                if not hashmap_is_empty and part_index % ResourceAdvertisement.HASHMAP_MAX_LEN != 0:
                     RNS.log("Resource sequencing error, cancelling transfer!", RNS.LOG_ERROR)
                     self.cancel()
                     return
@@ -1286,8 +1309,9 @@ class ResourceAdvertisement:
         adv = ResourceAdvertisement.unpack(advertisement_packet.plaintext)
         return adv.d
 
-    def __init__(self, resource=None, request_id=None, is_response=False):
+    def __init__(self, resource=None, request_id=None, is_response=False, mdu=None):
         self.link = None
+        self.mdu  = mdu or RNS.Link.MDU
         if resource != None:
             self.t = resource.size              # Transfer size
             self.d = resource.total_size        # Total uncompressed data size
@@ -1298,6 +1322,7 @@ class ResourceAdvertisement:
             self.m = resource.hashmap           # Resource hashmap
             self.c = resource.compressed        # Compression flag
             self.e = resource.encrypted         # Encryption flag
+            self.a = resource.app_flag          # Application flag
             self.s = resource.split             # Split flag
             self.x = resource.has_metadata      # Metadata flag
             self.i = resource.segment_index     # Segment index
@@ -1315,7 +1340,7 @@ class ResourceAdvertisement:
                     self.p = True
 
             # Flags
-            self.f = 0x00 | self.x << 5 | self.p << 4 | self.u << 3 | self.s << 2 | self.c << 1 | self.e
+            self.f = 0x00 | self.a << 6 | self.x << 5 | self.p << 4 | self.u << 3 | self.s << 2 | self.c << 1 | self.e
 
     def get_transfer_size(self): return self.t
     def get_data_size(self):     return self.d
@@ -1346,7 +1371,13 @@ class ResourceAdvertisement:
                        "f": self.f,    # Resource flags
                        "m": hashmap }
 
-        return umsgpack.packb(dictionary)
+        packed_adv = umsgpack.packb(dictionary)
+        if len(packed_adv) > self.mdu:
+            RNS.log(f"Resource advertisement ({RNS.prettysize(len(packed_adv))}) exceeds link MDU, deferring initial HMU", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+            dictionary["m"] = b""
+            packed_adv = umsgpack.packb(dictionary)
+
+        return packed_adv
 
     @staticmethod
     def unpack(data):
@@ -1370,6 +1401,7 @@ class ResourceAdvertisement:
         adv.u = True if ((adv.f >> 3) & 0x01) == 0x01 else False
         adv.p = True if ((adv.f >> 4) & 0x01) == 0x01 else False
         adv.x = True if ((adv.f >> 5) & 0x01) == 0x01 else False
+        adv.a = True if ((adv.f >> 6) & 0x01) == 0x01 else False
 
         if adv.t > Resource.MAX_EFFICIENT_SIZE*3: raise ValueError("Invalid transfer size")
 
