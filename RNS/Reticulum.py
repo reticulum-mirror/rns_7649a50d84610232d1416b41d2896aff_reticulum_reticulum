@@ -2278,7 +2278,8 @@ class Reticulum:
         return Reticulum.__inbound_il_queue_length
 
 # Default configuration file:
-__default_rns_config__ = '''# This is the default Reticulum config file.
+__default_rns_config__ = '''##########################################################
+# This is the default Reticulum config file.
 # You should probably edit it to include any additional,
 # interfaces and settings you might need.
 
@@ -2362,6 +2363,22 @@ instance_name = default
 
 # blackhole_sources = 521c87a83afb8f29e4455e77930b973b
 
+##########################################################
+# This section configures stamping behaviour and defaults.
+# In most cases, you do not need to change this, but on
+# constrained systems especially, tuning these parameters
+# can be very beneficial. See "rnsd --exampleconfig" or
+# the manual for a full explanation of these parameters.
+
+[stamps]
+
+# destination_cost = 23.5
+# destination_value = 25.0
+# pr_cost = 15.8
+# pr_value = 15.8
+# lr_cost = 12.5
+# lr_stamp_timeout = 15
+# pr_stamp_timeout = 15
 
 [logging]
 # Valid log levels are 0 through 8:
@@ -2377,7 +2394,7 @@ instance_name = default
 
 loglevel = 4
 
-
+##########################################################
 # The interfaces section defines the physical and virtual
 # interfaces Reticulum will use to communicate on. This
 # section will contain examples for a variety of interface

@@ -3,6 +3,12 @@
 *Pending*.
 
 **Changes**
+- Added `Identity` stamps
+- Added destination and announce stamps
+- Added path request stamps
+- Added link request stamps
+- Added link request cost signalling to announces
+- Added fractional stamp value support
 - Added path usage tracking
 - Added automatic path table culling based on traffic and usage
 - Added unused path pool monitoring and handling
@@ -13,10 +19,13 @@
 - Added more comprehensive metrics to status output structure
 - Added heap-tracking memory management
 - Added `hop_limiter` configuration option
+- Optimized and improved stamper implementation
 - Optimized announce rate table implementation
 - Optimized packet filter hashlist implementation
 - Fixed `RNodeInterface` phy stats regression on Android
 - Fixed `rngit` default config path typo for `~/.config/rngit` case
+- Fixed various minor bugs and inconsistencies
+- Updated documentation
 
 ### 2026-10-05: RNS 1.5.7
 

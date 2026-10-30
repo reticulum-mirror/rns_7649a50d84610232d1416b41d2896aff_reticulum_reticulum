@@ -199,9 +199,9 @@ class Transport:
     LINK_COST_CAP               = 40           # Global hard cap on link request cost, separate from detached stamps
     DESTINATION_COST            = 23.5         # Default required announce cost if no specifics configured or determined
     DESTINATION_VALUE           = 25.0         # Default target stamp value for emitted announces
-    PR_COST                     = 19.8         # Default required path request cost if no specifics configured or determined
-    PR_VALUE                    = 19.8         # Default target stamp value for emitted path requests
-    LR_COST                     = 19.2         # Default required link request cost if not explicitly announced or configured
+    PR_COST                     = 15.8         # Default required path request cost if no specifics configured or determined
+    PR_VALUE                    = 15.8         # Default target stamp value for emitted path requests
+    LR_COST                     = 12.5         # Default required link request cost if not explicitly announced or configured
     LINK_STAMP_TIMEOUT          = 15           # Default link request stamp generation timeout
     PR_STAMP_TIMEOUT            = 15           # Default path request stamp generation timeout
     HOP_LIMITER                 = PATHFINDER_M

@@ -332,7 +332,7 @@ instance_name = default
 # if transport is enabled. Any announced destination not
 # meeting the cost will be ignored.
 
-# destination_cost = 23
+# destination_cost = 23.5
 
 
 # The default value this instance will target when generating
@@ -342,19 +342,19 @@ instance_name = default
 # Destination stamps are cached and reused, so a one-time
 # high-value generation is usually a good idea.
 
-# destination_value = 25
+# destination_value = 25.0
 
 
 # The default required path request stamp cost. Path requests
 # that do not meet the requirement are ignored.
 
-# pr_cost = 19
+# pr_cost = 15.8
 
 
 # The default target value of path request stamps generated
 # by this instance.
 
-# pr_value = 19
+# pr_value = 15.8
 
 
 # The default link request stamp cost to use, if one has not
@@ -363,7 +363,7 @@ instance_name = default
 # include their required link cost in each announce, and this
 # option is rarely necessary.
 
-# lr_cost = 11
+# lr_cost = 12.5
 
 
 # The maximum amount of time to spend attempting to generate
