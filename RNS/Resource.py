@@ -1350,6 +1350,7 @@ class ResourceAdvertisement:
     def is_compressed(self):     return self.c
     def has_metadata(self):      return self.x
     def get_link(self):          return self.link
+    def app_flag_set(self):      return self.f >> 6 & 0x01
 
     def pack(self, segment=0):
         hashmap_start = segment*ResourceAdvertisement.HASHMAP_MAX_LEN
