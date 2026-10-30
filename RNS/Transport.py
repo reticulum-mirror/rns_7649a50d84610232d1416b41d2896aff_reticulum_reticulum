@@ -2072,15 +2072,16 @@ class Transport:
                             tag_valid = True
 
                     if not tag_valid:
-                        RNS.log("Ignoring duplicate path request for "+RNS.prettyhexrep(destination_hash)+" with tag "+RNS.prettyhexrep(unique_tag), RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
+                        RNS.log(f"Ignoring duplicate path request for {RNS.prettyhexrep(destination_hash)} with tag {RNS.prettyhexrep(unique_tag)}", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
                         return
 
                     if Transport.STAMPS_ENABLED:
                         stamp_ok = False
                         if ext_payload != None:
                             if ext_payload[0] == RNS.Identity.EXTPAYLOADMARKER:
+                                required_value = packet.receiving_interface.pr_cost
                                 stamp = ext_payload[Transport.PR_EXT_HEADERLENGTH:]
-                                stamp_ok = Transport.validate_pr_stamp(stamp, destination_hash, tag_bytes)
+                                stamp_ok = Transport.validate_pr_stamp(stamp, destination_hash, tag_bytes, required_value=required_value)
 
                                 # TODO: Remove debug block #################################################
                                 dval = None

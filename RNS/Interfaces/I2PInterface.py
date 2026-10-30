@@ -817,6 +817,10 @@ class I2PInterface(Interface):
                 peer_interface.IN  = True
                 peer_interface.parent_interface = self
                 peer_interface.parent_count = False
+
+                peer_interface._destination_cost = self._destination_cost
+                peer_interface._pr_cost = self._pr_cost
+
                 RNS.Transport.add_interface(peer_interface)
 
     def incoming_connection(self, handler):
@@ -839,6 +843,9 @@ class I2PInterface(Interface):
         spawned_interface.ec_pr_freq = self.ec_pr_freq
         spawned_interface.ic_pr_burst_freq_new = self.ic_pr_burst_freq_new
         spawned_interface.ic_pr_burst_freq = self.ic_pr_burst_freq
+
+        spawned_interface._destination_cost = self._destination_cost
+        spawned_interface._pr_cost = self._pr_cost
         
         spawned_interface.parent_interface = self
         spawned_interface.online = True

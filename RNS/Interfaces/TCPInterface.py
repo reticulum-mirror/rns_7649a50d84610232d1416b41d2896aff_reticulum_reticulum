@@ -605,6 +605,9 @@ class TCPServerInterface(Interface):
         spawned_interface.ic_pr_burst_freq_new = self.ic_pr_burst_freq_new
         spawned_interface.ic_pr_burst_freq = self.ic_pr_burst_freq
 
+        spawned_interface._destination_cost = self._destination_cost
+        spawned_interface._pr_cost = self._pr_cost
+
         spawned_interface.target_ip = handler.client_address[0]
         spawned_interface.target_port = str(handler.client_address[1])
         spawned_interface.parent_interface = self

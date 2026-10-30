@@ -51,6 +51,8 @@ NAME            = 0xFF
 TRANSPORT_ID    = 0xFE
 TRANSPORT_IMPL  = 0xFD
 TRANSPORT_VERS  = 0xFC
+DST_COST        = 0xFB
+PR_COST         = 0xFA
 INTERFACE_TYPE  = 0x00
 TRANSPORT       = 0x01
 REACHABLE_ON    = 0x02
@@ -166,6 +168,8 @@ class InterfaceAnnouncer():
                      TRANSPORT_ID:   RNS.Transport.identity.hash,
                      TRANSPORT_IMPL: IMPLEMENTATION_NAME,
                      TRANSPORT_VERS: RNS_VERSION,
+                     DST_COST:       RNS.Stamps.quantize_cost(interface.destination_cost),
+                     PR_COST:        RNS.Stamps.quantize_cost(interface.pr_cost),
                      NAME:           self.sanitize(interface.discovery_name),
                      LATITUDE:       interface.discovery_latitude,
                      LONGITUDE:      interface.discovery_longitude,
@@ -338,6 +342,8 @@ class InterfaceAnnounceHandler:
                         name           = self.sanitize_name(unpacked[NAME])
                         impl_name      = unpacked[TRANSPORT_IMPL] if TRANSPORT_IMPL in unpacked else None
                         impl_version   = unpacked[TRANSPORT_VERS] if TRANSPORT_VERS in unpacked else None
+                        dst_cost       = RNS.Stamps.quantize_cost(unpacked[DST_COST]) if DST_COST in unpacked else None
+                        pr_cost        = RNS.Stamps.quantize_cost(unpacked[PR_COST]) if PR_COST in unpacked else None
 
                         if type(unpacked[TRANSPORT]) != bool: raise ValueError("Invalid data in transport field of announce")
                         if type(unpacked[LATITUDE])  not in [type(None), float]: raise ValueError("Invalid data in latitude field of announce")
@@ -361,6 +367,8 @@ class InterfaceAnnounceHandler:
                                 "value":        value,
                                 "transport_id": RNS.hexrep(unpacked[TRANSPORT_ID], delimit=False),
                                 "network_id":   RNS.hexrep(announced_identity.hash, delimit=False),
+                                "dst_cost":     dst_cost,
+                                "pr_cost":      pr_cost,
                                 "hops":         hops,
                                 "latitude":     unpacked[LATITUDE],
                                 "longitude":    unpacked[LONGITUDE],
@@ -457,7 +465,7 @@ class InterfaceAnnounceHandler:
                     if self.callback and callable(self.callback): self.callback(info)
 
         except Exception as e:
-            RNS.log(f"An error occurred while trying to decode discovered interface. The contained exception was: {e}", RNS.LOG_DEBUG)
+            RNS.log(f"Could not decode discovered interface. The contained exception was: {e}", RNS.LOG_DEBUG)
 
 class InterfaceDiscovery():
     THRESHOLD_UNKNOWN  = 24*60*60
@@ -475,7 +483,7 @@ class InterfaceDiscovery():
     DISCOVERABLE_TYPES = ["BackboneInterface", "TCPServerInterface", "I2PInterface", "RNodeInterface", "WeaveInterface", "KISSInterface"]
 
     AUTOCONNECT_IMPLS  = ["RNS"]
-    AUTOCONNECT_MIN_V  = "1.5.2"
+    AUTOCONNECT_MIN_V  = "1.5.7"
 
     AC_TRANSPORT_MODE  = RNS.Interfaces.Interface.Interface.MODE_GATEWAY
     AC_GRAVITY         = 0
@@ -787,11 +795,23 @@ class InterfaceDiscovery():
                 autoconnected_count = self.autoconnect_count()
                 if autoconnected_count < RNS.Reticulum.max_autoconnected_interfaces():
                     interface_type = info["type"]
+                    has_cost_info  = "dst_cost" in info and "pr_cost" in info
                     if interface_type in self.AUTOCONNECT_TYPES:
+                        impl = f"{info['impl_name']} {info['version']}" if ("impl_name" in info and "version" in info and info["impl_name"] and info["version"]) else "unknown implementation"
                         if not self.autoconnect_qualified(info):
-                            impl = f"{info['impl_name']} {info['version']}" if ("impl_name" in info and "version" in info and info["impl_name"] and info["version"]) else "unknown implementation"
                             RNS.log(f"Not auto-connecting discovered {interface_type} {info['name']} ({impl}), auto-connect criteria not satisfied", RNS.LOG_DEBUG)
                             return
+
+                        if has_cost_info:
+                            dst_value = RNS.Stamps.quantize_cost(RNS.Transport.DESTINATION_VALUE)
+                            pr_value  = RNS.Stamps.quantize_cost(RNS.Transport.PR_VALUE)
+                            dst_cost  = RNS.Stamps.quantize_cost(info["dst_cost"] or 0)
+                            pr_cost   = RNS.Stamps.quantize_cost(info["pr_cost"]  or 0)
+                            dst_cost_ok = dst_cost <= dst_value
+                            pr_cost_ok  = pr_cost  <= pr_value
+                            if not dst_cost_ok: RNS.log(f"Destination cost {dst_cost} higher than configured value {dst_value} for {interface_type} {info['name']} ({impl}), not auto-connecting", RNS.LOG_DEBUG)
+                            if not pr_cost_ok:  RNS.log(f"Path request cost {pr_cost} higher than configured value {pr_value} for {interface_type} {info['name']} ({impl}), not auto-connecting", RNS.LOG_DEBUG)
+                            if not dst_cost_ok or not pr_cost_ok: return
 
                         endpoint_hash = self.endpoint_hash(info)
                         exists = self.interface_exists(info)

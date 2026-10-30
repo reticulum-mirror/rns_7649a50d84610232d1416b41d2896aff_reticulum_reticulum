@@ -174,6 +174,9 @@ class Interface:
         self._dp_ec_zero_ticks   = 0
         self._dp_ec_last_drain   = time.time()
 
+        self._destination_cost   = None
+        self._pr_cost            = None
+
         self.reports_phy_stats = False
         self.r_stat_rssi       = None
         self.r_stat_snr        = None
@@ -342,6 +345,16 @@ class Interface:
     def hop_limiter_hit(self):
         self.hop_limiter_hits += 1
         return None
+
+    @property
+    def destination_cost(self):
+        if not self._destination_cost == None: return self._destination_cost
+        else:                                  return RNS.Transport.DESTINATION_COST
+
+    @property
+    def pr_cost(self):
+        if not self._pr_cost == None: return self._pr_cost
+        else:                         return RNS.Transport.PR_COST
 
     @property
     def ic_burst_count(self): return None

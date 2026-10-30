@@ -933,6 +933,16 @@ class Reticulum:
         gravity = self._default_gravity()
         if "gravity" in c: gravity = c.as_int("gravity")
 
+        destination_cost = None
+        if "destination_cost" in c:
+            v = c.as_float("destination_cost")
+            destination_cost = max(0, min(v, RNS.Transport.STAMP_COST_CAP))
+
+        pr_cost = None
+        if "pr_cost" in c:
+            v = c.as_float("pr_cost")
+            pr_cost = max(0, min(v, RNS.Transport.STAMP_COST_CAP))
+
         ifac_size = None
         if "ifac_size" in c:
             if c.as_int("ifac_size") >= Reticulum.IFAC_MIN_SIZE*8: ifac_size = c.as_int("ifac_size")//8
@@ -1116,6 +1126,9 @@ class Reticulum:
                     interface.announce_rate_grace             = announce_rate_grace
                     interface.announce_rate_penalty           = announce_rate_penalty
                     interface.ingress_control                 = ingress_control
+
+                    interface._destination_cost               = destination_cost
+                    interface._pr_cost                        = pr_cost
 
                     if egress_control != None:           interface.egress_control           = egress_control
                     if ic_max_held_announces != None:    interface.ic_max_held_announces    = ic_max_held_announces

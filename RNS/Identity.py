@@ -674,7 +674,10 @@ class Identity:
 
     @staticmethod
     def validate_announce(packet, only_validate_signature=False, signal_blackholed=False, signal_stamp=False, required_value=None):
-        if required_value == None: required_value = RNS.Transport.DESTINATION_COST
+        if required_value == None:
+            if packet.receiving_interface: required_value = packet.receiving_interface.destination_cost
+            else:                          required_value = RNS.Transport.DESTINATION_COST
+
         try:
             if packet.packet_type == RNS.Packet.ANNOUNCE:
                 keysize       = Identity.KEYSIZE//8

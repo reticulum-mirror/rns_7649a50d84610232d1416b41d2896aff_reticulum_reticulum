@@ -557,6 +557,9 @@ class AutoInterface(Interface):
                 spawned_interface.ec_pr_freq = self.ec_pr_freq
                 spawned_interface.ic_pr_burst_freq_new = self.ic_pr_burst_freq_new
                 spawned_interface.ic_pr_burst_freq = self.ic_pr_burst_freq
+
+                spawned_interface._destination_cost = self._destination_cost
+                spawned_interface._pr_cost = self._pr_cost
                 
                 spawned_interface.parent_interface = self
                 spawned_interface.bitrate = self.bitrate

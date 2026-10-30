@@ -933,6 +933,9 @@ class WeaveInterface(Interface):
             spawned_interface.ic_new_time = self.ic_new_time
             spawned_interface.ic_burst_penalty = self.ic_burst_penalty
             spawned_interface.ic_held_release_interval = self.ic_held_release_interval
+
+            spawned_interface._destination_cost = self._destination_cost
+            spawned_interface._pr_cost = self._pr_cost
             
             spawned_interface.parent_interface = self
             spawned_interface.bitrate = self.bitrate
