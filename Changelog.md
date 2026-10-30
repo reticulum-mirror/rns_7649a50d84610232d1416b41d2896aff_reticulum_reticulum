@@ -39,6 +39,7 @@ The `1.6.0` and `1.6.1` releases will be an important time for observing the on-
 - Added link request cost signalling to announces
 - Added fractional stamp value support
 - Added path usage tracking
+- Added path retainment prioritization for slow interfaces
 - Added automatic path table culling based on traffic and usage
 - Added unused path pool monitoring and handling
 - Added managed storage backend using SQLite
@@ -53,6 +54,7 @@ The `1.6.0` and `1.6.1` releases will be an important time for observing the on-
 - Optimized announce rate table implementation
 - Optimized packet filter hashlist implementation
 - Fixed `RNodeInterface` phy stats regression on Android
+- Fixed missing interface parameter inheritances
 - Fixed `rngit` default config path typo for `~/.config/rngit` case
 - Fixed various minor bugs and inconsistencies
 - Updated documentation

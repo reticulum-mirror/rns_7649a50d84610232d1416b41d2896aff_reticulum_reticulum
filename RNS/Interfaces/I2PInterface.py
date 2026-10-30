@@ -741,6 +741,7 @@ class I2PInterface(Interface):
         self.owner = owner
         self.connectable = connectable
         self.i2p_tunneled = True
+        self.peers = peers
         self.mode = RNS.Interfaces.Interface.Interface.MODE_FULL
 
         self.b32 = None
@@ -749,7 +750,6 @@ class I2PInterface(Interface):
         self.IN  = True
         self.OUT = False
         self.name = name
-
 
         self.receives = True
         self.bind_ip     = "127.0.0.1"
@@ -809,26 +809,61 @@ class I2PInterface(Interface):
             thread.daemon = True
             thread.start()
 
-        if peers != None:
-            for peer_addr in peers:
-                interface_name = self.name+" to "+peer_addr
-                peer_interface = I2PInterfacePeer(self, self.owner, interface_name, peer_addr)
-                peer_interface.OUT = True
-                peer_interface.IN  = True
-                peer_interface.parent_interface = self
-                peer_interface.parent_count = False
+        threading.Thread(target=self._spawn_peers, daemon=True).start()
 
-                peer_interface._destination_cost = self._destination_cost
-                peer_interface._pr_cost = self._pr_cost
+    def _spawn_peers(self):
+        time.sleep(1.5)
+        if self.peers != None:
+            for peer_addr in self.peers:
+                try:
+                    interface_name = self.name+" to "+peer_addr
+                    peer_interface = I2PInterfacePeer(self, self.owner, interface_name, peer_addr)
+                    peer_interface.OUT = self.OUT
+                    peer_interface.IN  = self.IN
+                    peer_interface.parent_interface = self
+                    peer_interface.parent_count = False
 
-                RNS.Transport.add_interface(peer_interface)
+                    peer_interface.mode = self.mode
+                    peer_interface.bitrate = self.bitrate
+                    peer_interface.recursive_prs = self.recursive_prs
+                    peer_interface.gravity = self.gravity
+                    peer_interface.HW_MTU = self.HW_MTU
+
+                    peer_interface.announces_to_internal = self.announces_to_internal
+                    peer_interface.announces_from_internal = self.announces_from_internal
+                    peer_interface.announce_cap = self.announce_cap
+
+                    peer_interface.ingress_control = self.ingress_control
+                    peer_interface.ic_max_held_announces = self.ic_max_held_announces
+                    peer_interface.ic_burst_hold = self.ic_burst_hold
+                    peer_interface.ic_burst_freq = self.ic_burst_freq
+                    peer_interface.ic_burst_freq_new = self.ic_burst_freq_new
+                    peer_interface.ic_new_time = self.ic_new_time
+                    peer_interface.ic_burst_penalty = self.ic_burst_penalty
+                    peer_interface.ic_held_release_interval = self.ic_held_release_interval
+
+                    peer_interface.egress_control = self.egress_control
+                    peer_interface.ec_pr_freq = self.ec_pr_freq
+                    peer_interface.ic_pr_burst_freq_new = self.ic_pr_burst_freq_new
+                    peer_interface.ic_pr_burst_freq = self.ic_pr_burst_freq
+
+                    peer_interface.announce_rate_target = self.announce_rate_target
+                    peer_interface.announce_rate_grace = self.announce_rate_grace
+                    peer_interface.announce_rate_penalty = self.announce_rate_penalty
+
+                    peer_interface._destination_cost = self._destination_cost
+                    peer_interface._pr_cost = self._pr_cost
+
+                    RNS.Transport.add_interface(peer_interface)
+
+                except Exception as e: RNS.log(f"Could not create interface for {self} to {peer_addr}: {e}", RNS.LOG_ERROR)
 
     def incoming_connection(self, handler):
         RNS.log("Accepting incoming I2P connection", RNS.LOG_VERBOSE)
         interface_name = "Connected peer on "+self.name
         spawned_interface = I2PInterfacePeer(self, self.owner, interface_name, connected_socket=handler.request)
-        spawned_interface.OUT = True
-        spawned_interface.IN  = True
+        spawned_interface.OUT = self.OUT
+        spawned_interface.IN  = self.IN
 
         spawned_interface.ingress_control = self.ingress_control
         spawned_interface.ic_max_held_announces = self.ic_max_held_announces
@@ -838,6 +873,10 @@ class I2PInterface(Interface):
         spawned_interface.ic_new_time = self.ic_new_time
         spawned_interface.ic_burst_penalty = self.ic_burst_penalty
         spawned_interface.ic_held_release_interval = self.ic_held_release_interval
+
+        spawned_interface.announces_to_internal = self.announces_to_internal
+        spawned_interface.announces_from_internal = self.announces_from_internal
+        spawned_interface.announce_cap = self.announce_cap
 
         spawned_interface.egress_control = self.egress_control
         spawned_interface.ec_pr_freq = self.ec_pr_freq
@@ -868,6 +907,7 @@ class I2PInterface(Interface):
         spawned_interface.announce_rate_grace = self.announce_rate_grace
         spawned_interface.announce_rate_penalty = self.announce_rate_penalty
         spawned_interface.mode = self.mode
+        spawned_interface.recursive_prs = self.recursive_prs
         spawned_interface.gravity = self.gravity
         spawned_interface.HW_MTU = self.HW_MTU
         RNS.log("Spawned new I2PInterface Peer: "+str(spawned_interface), RNS.LOG_VERBOSE)

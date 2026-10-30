@@ -934,11 +934,16 @@ class WeaveInterface(Interface):
             spawned_interface.ic_burst_penalty = self.ic_burst_penalty
             spawned_interface.ic_held_release_interval = self.ic_held_release_interval
 
+            spawned_interface.announces_to_internal = self.announces_to_internal
+            spawned_interface.announces_from_internal = self.announces_from_internal
+            spawned_interface.announce_cap = self.announce_cap
+
             spawned_interface._destination_cost = self._destination_cost
             spawned_interface._pr_cost = self._pr_cost
             
             spawned_interface.parent_interface = self
             spawned_interface.bitrate = self.bitrate
+            spawned_interface.recursive_prs = self.recursive_prs
             
             spawned_interface.ifac_size = self.ifac_size
             spawned_interface.ifac_netname = self.ifac_netname
@@ -963,10 +968,17 @@ class WeaveInterface(Interface):
             spawned_interface.announce_rate_target = self.announce_rate_target
             spawned_interface.announce_rate_grace = self.announce_rate_grace
             spawned_interface.announce_rate_penalty = self.announce_rate_penalty
+
+            spawned_interface.egress_control = self.egress_control
+            spawned_interface.ec_pr_freq = self.ec_pr_freq
+            spawned_interface.ic_pr_burst_freq_new = self.ic_pr_burst_freq_new
+            spawned_interface.ic_pr_burst_freq = self.ic_pr_burst_freq
+
             spawned_interface.mode = self.mode
             spawned_interface.gravity = self.gravity
             spawned_interface.HW_MTU = self.HW_MTU
             spawned_interface._online = True
+
             RNS.Transport.add_interface(spawned_interface)
             if endpoint_addr in self.spawned_interfaces:
                 self.spawned_interfaces[endpoint_addr].detach()
