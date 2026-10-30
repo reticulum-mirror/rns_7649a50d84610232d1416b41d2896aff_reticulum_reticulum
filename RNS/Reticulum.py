@@ -946,7 +946,7 @@ class Reticulum:
         ifac_size = None
         if "ifac_size" in c:
             if c.as_int("ifac_size") >= Reticulum.IFAC_MIN_SIZE*8: ifac_size = c.as_int("ifac_size")//8
-                
+
         ifac_netname = None
         if "networkname" in c:
             if c["networkname"] == "None": RNS.log("Ambiguous IFAC network name \"None\", this value is ignored and an IFAC network name has NOT been set", RNS.LOG_WARNING)
