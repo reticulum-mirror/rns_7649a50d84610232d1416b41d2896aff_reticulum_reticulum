@@ -1,6 +1,35 @@
 ### RNS 1.6.0
 
-*Pending*.
+This major release of Reticulum brings significant improvements to resource consumption, performance, stability and resilience, especially for constrained devices and nodes.
+
+**Memory & Performance Improvements**
+
+A new, SQLite based storage backend has been implemented, and is now the default. All legacy file-based storage will be auto-migrated to the database-backed store on the first start. If you are using an esoteric system that does not support the `sqlite3` module, Reticulum will automatically fall back to using the file-based storage system.
+
+The memory management system has been completely reworked, and significantly improved. For long-running transport nodes, this cuts memory consumption by approximately 50%, and for non-transport instances, standalone applications and appliance devices by up to 80%.
+
+**Path Table Sharding**
+
+This release implements the initial transport awareness and mechanisms for emergent path table sharding. Transport instances will no longer attempt to hold full inter-network path tables in memory, but keep only paths relevant to the nodes they are transporting traffic for. Unused paths are now kept for much shorter periods of time, and used as a rolling pool that potential new traffic corridors can form into. The system is entirely passive, and adds no inter-node coordination or additional protocol mechanics. The current release brings the foundation, and the upcoming 1.6.x releases will tune and improve it.
+
+**Network Stamps**
+
+The stamp system, first introduced in LXMF, where it was tested and refined over the last two years, has now been brought into the core of Reticulum to help protect against spam and network abuse. All the relevant core primtives now support stamp generation and verification:
+
+- Identities can be created with an embedded stamp value. This adds no additional bytes or identity format changes. Generation and verification is completely transparent, and carried within the Reticulum Identity keyset.
+- Destinations can now be stamped, and will embed stamps and required link request cost in their announces. The change is backwards-compatible, so even older versions of Reticulum carry stamped announces transparently. Destination stamps are one-time generations, stored and persisted on success, so these have relatively high default target values. Expect some CPU usage when an unstamped destination has its stamp generated for the first time on 1.6.0+.
+- Path requests can now be stamped, and are also backwards-compatible. A stamped path request will be carried transparently by non stamp-aware transport nodes.
+- Link requests are stamped according to the announced link request cost of the destination. As with all the other primitives, these are also completely transparent and backwards-compatible. The stamp is carried embedded in the ephemeral link request keyset.
+
+The stamp functionality and requirements will be deployed in a phased transition, so both network operators and application developers have time to update their systems, and any potential bugs and issues can be worked out before the full deployment:
+
+- Version `1.6.0` implements all the core functionality and primitives, and starts excercising the verification mechanics. By default, no destination and path request stamps are generated yet in this release, and while stamps are checked and verified, they are not *enforced*. However, both stamp emission and enforcement can be enabled in the configuration for testing or early opt-in. Link request stamps *will* be generated, if the destination has announced a cost.
+- Version `1.6.1` will enable stamp emission for all network primitives by default. Old, unstamped destinations will have their stamps generated automatically on their first announce, and will start announcing link request costs as configured. Enforcement in this phase will still be disabled by default, but can be enabled by configuration.
+- Version `1.6.2` will complete the transition to network stamps. All functionality will now be enabled by default, including enforcement. Destination announces, path requests and link requests that do not meet stamp requirements will be dropped. Any old transport nodes that have not updated to `1.6.x` will not be able to communicate with stamp-enforcing nodes, but will still *carry traffic for* stamp-capable systems.
+
+The `1.6.0` and `1.6.1` releases will be an important time for observing the on-network behaviour, functionality and stability of the system, and to make any potential adjustments or fix problems before the final transition to `1.6.2`. If you're operating a transport node, please help out by reporting any problems or issues you discover.
+
+**For application developers**, there is no immediate refactoring or changes required application-side. Simply updating RNS to `1.6.0` is sufficient to transparently enable all the new functionality and improvements. It is very much recommended, however, to familiarize yourself with the new API methods for specifying link request costs and destination values, as these are configurable on a per-destination basis, and might warrant specific configuration for your intended use-case.
 
 **Changes**
 - Added `Identity` stamps
@@ -19,6 +48,7 @@
 - Added more comprehensive metrics to status output structure
 - Added heap-tracking memory management
 - Added `hop_limiter` configuration option
+- Added cost-aware interface discovery and auto-connects
 - Optimized and improved stamper implementation
 - Optimized announce rate table implementation
 - Optimized packet filter hashlist implementation
@@ -26,13 +56,6 @@
 - Fixed `rngit` default config path typo for `~/.config/rngit` case
 - Fixed various minor bugs and inconsistencies
 - Updated documentation
-
-### 2026-10-05: RNS 1.5.7
-
-This maintenance release fixes a bug in the dataplane egress control handling.
-
-**Changes**
-- Fixed egress control TX stall state deadlock on BackboneInterface initiator instances
 
 **Verified Retrieval**
 You can retrieve and verify this release over Reticulum using the built-in `rngit release` utility. To retrieve only the installation `.whl` package, and the release manifest for future updates, you can use:
@@ -61,6 +84,13 @@ rnid -i bc7291552be7a58f361522990465165c -V rns_*.rsm *.rsg
 ```
 
 The `rnid` utility will then verify the signatures, and display whether they are valid. If the signature cannot be verified, the release has been tampered with and should be discarded.
+
+### 2026-10-05: RNS 1.5.7
+
+This maintenance release fixes a bug in the dataplane egress control handling.
+
+**Changes**
+- Fixed egress control TX stall state deadlock on BackboneInterface initiator instances
 
 ### 2026-10-02: RNS 1.5.6
 
