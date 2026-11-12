@@ -299,7 +299,7 @@ def program_setup(configdir, table, rates, drop, destination_hexhash, verbosity,
                     else:
                         if usage: u_str = f", last used {RNS.prettytime(now-path['used'])} ago" if path["used"] else ", never used"
                         else: u_str = ""
-                    print(f"{RNS.prettyhexrep(path['hash'])} {path['hops']:>3}h via {RNS.prettyhexrep(path['via'])} on {path['interface']} expires in {RNS.prettytime(path['expires']-now, compact=True)} (dv:{RNS.prettycost(path['value'])}/lc:{RNS.prettycost(path['lr_cost'])})")
+                    print(f"{RNS.prettyhexrep(path['hash'])} {path['hops']:>3}h via {RNS.prettyhexrep(path['via'])} on {path['interface']} expires in {RNS.prettytime(path['expires']-now, compact=True)} (dv:{RNS.prettycost(path['value'])}/lc:{RNS.prettycost(path['lr_cost'])}){u_str}")
 
             if destination_hash != None and displayed == 0:
                 print("No path known")
