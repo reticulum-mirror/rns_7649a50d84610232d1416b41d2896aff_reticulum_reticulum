@@ -1775,6 +1775,7 @@ class Reticulum:
 
                 ifstats["name"]                        = str(interface)
                 ifstats["short_name"]                  = str(interface.name)
+                ifstats["tunnel_id"]                   = interface.tunnel_id
                 ifstats["hash"]                        = interface.get_hash()
                 ifstats["type"]                        = str(type(interface).__name__)
                 ifstats["mtu"]                         = interface.HW_MTU

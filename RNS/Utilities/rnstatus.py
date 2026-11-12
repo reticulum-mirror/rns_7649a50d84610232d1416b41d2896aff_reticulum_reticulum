@@ -551,6 +551,9 @@ def program_setup(configdir, dispall=False, verbosity=0, name_filter=None, json=
                         if "bitrate" in ifstat and ifstat["bitrate"] != None:
                             print(f"    Rate      : {speed_str(ifstat['bitrate'])}, MTU {ifstat['mtu']}")
 
+                        # if "tunnel_id" in ifstat: # TODO: Add switch
+                        #     print(f"    Tunnel ID : {RNS.prettyhexrep(ifstat['tunnel_id']) if ifstat['tunnel_id'] else 'None'}")
+
                         if "noise_floor" in ifstat:
                             if not "interference" in ifstat: nstr = ""
                             else:
