@@ -1135,6 +1135,7 @@ class Transport:
                             path_timestamp     = path_entry[IDX_PT_TIMESTAMP]
                             path_expiry        = path_entry[IDX_PT_EXPIRES]
                             path_used          = path_entry[IDX_PT_USED]
+                            path_hops          = path_entry[IDX_PT_HOPS]
 
                             interface_bitrate  = getattr(attached_interface, "bitrate", None)
                             slow_interface     = interface_bitrate != None and 0 < interface_bitrate < Transport.PATH_SLOW_BITRATE
@@ -1157,6 +1158,10 @@ class Transport:
                                 stale_paths.append(destination_hash)
                                 Transport.should_collect = True
                                 RNS.log(f"Removing never used path to {RNS.prettyhexrep(destination_hash)}", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
+                            elif path_hops > Transport.HOP_LIMITER:
+                                stale_paths.append(destination_hash)
+                                Transport.should_collect = True
+                                RNS.log(f"Removing excessive hops path to {RNS.prettyhexrep(destination_hash)}", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
 
                         unused_trim        = max(0, used_count-Transport.PATH_POOL_USED_TARGET)
                         unused_pool_target = max(Transport.PATH_POOL_UNUSED_MIN, Transport.PATH_POOL_UNUSED_MAX-unused_trim)
@@ -2035,6 +2040,7 @@ class Transport:
             name_hash = packet.data[RNS.Identity.KEYSIZE//8:RNS.Identity.KEYSIZE//8+RNS.Identity.NAME_HASH_LENGTH//8]
             if len(name_hash) != RNS.Identity.NAME_HASH_LENGTH//8: return packet.receiving_interface.protocol_violation(f"Malformed announce packet with size {len(packet.data)}")
             if len(raw) > RNS.Reticulum.MTU: return packet.receiving_interface.protocol_violation(f"Excessive announce packet frame size of {len(raw)} bytes") if packet.receiving_interface else None
+            if len(packet.receiving_interface.held_announces) >= packet.receiving_interface.ic_max_held_announces: return None
 
             if Transport.blocked_destination_types and name_hash in Transport.blocked_destination_types: return
             if Transport.required_destinations_only:
