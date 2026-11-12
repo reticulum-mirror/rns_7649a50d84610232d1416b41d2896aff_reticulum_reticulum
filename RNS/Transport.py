@@ -545,6 +545,7 @@ class Transport:
                     serialised_destinations = umsgpack.unpackb(file.read())
                     file.close()
 
+                    filtered = 0
                     now = time.time()
                     for serialised_entry in serialised_destinations:
                         destination_hash = serialised_entry[0]
@@ -572,6 +573,11 @@ class Transport:
                                 # over an interface. It is cached with it's non-
                                 # increased hop-count.
                                 announce_packet.hops += 1
+                                name_hash = announce_packet.data[RNS.Identity.KEYSIZE//8:RNS.Identity.KEYSIZE//8+RNS.Identity.NAME_HASH_LENGTH//8]
+                                if name_hash in Transport.blocked_destination_types or Transport.required_destinations_only and name_hash not in Transport.allowed_destination_types:
+                                    filtered += 1
+                                    continue
+
                                 with Transport.path_table_lock:
                                     Transport.path_table[destination_hash] = [timestamp, received_from, hops, expires,
                                                                               random_blobs, receiving_interface,
@@ -587,11 +593,11 @@ class Transport:
                     if len(Transport.path_table) == 1: specifier = "entry"
                     else:                              specifier = "entries"
 
-                    RNS.log("Loaded "+str(len(Transport.path_table))+" path table "+specifier+" from storage", RNS.LOG_VERBOSE) if RNS.sl(RNS.LOG_VERBOSE) else None
+                    RNS.log(f"Loaded {len(Transport.path_table)} path table {specifier} from storage{', '+str(filtered)+' filtered' if filtered else ''}", RNS.LOG_VERBOSE) if RNS.sl(RNS.LOG_VERBOSE) else None
                     garbage_collect()
 
                 except Exception as e:
-                    RNS.log("Could not load destination table from storage, the contained exception was: "+str(e), RNS.LOG_ERROR)
+                    RNS.log(f"Could not load path table from storage, the contained exception was: {e}", RNS.LOG_ERROR)
                     garbage_collect()
 
             if os.path.isfile(tunnel_table_path) and not Transport.owner.is_connected_to_shared_instance:
