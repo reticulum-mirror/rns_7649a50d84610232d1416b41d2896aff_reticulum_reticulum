@@ -1797,6 +1797,7 @@ class Reticulum:
                 ifstats["atxb"]                        = interface.atxb
                 ifstats["arxc"]                        = interface.arxc
                 ifstats["atxc"]                        = interface.atxc
+                ifstats["afrxc"]                       = interface.afrxc
                 ifstats["prxb"]                        = interface.prxb
                 ifstats["ptxb"]                        = interface.ptxb
                 ifstats["prxc"]                        = interface.prxc

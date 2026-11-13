@@ -381,6 +381,7 @@ class Transport:
     traffic_txb                 = 0
     filtered_rxb                = 0
     filtered_txb                = 0
+    filtered_arxc               = 0
     announce_rxc                = 0
     announce_txc                = 0
     announce_rxb                = 0
@@ -2041,7 +2042,7 @@ class Transport:
                 time.sleep(0.25)
                 if time.time() > wait_start + Transport.READY_WAIT:
                     RNS.log("Inbound packet timed out waiting for transport startup, dropping", RNS.LOG_WARNING)
-                    return
+                    return None
 
         # If interface access codes are enabled,
         # we must authenticate each packet.
@@ -2052,7 +2053,7 @@ class Transport:
                     if raw[0] & 0x80 == 0x80:
                         if len(raw) > 2+interface.ifac_size:
                             ifac_valid, raw = Transport.handle_ifac(raw, interface)
-                            if not ifac_valid: return
+                            if not ifac_valid: return None
 
                         else: return interface.ifac_violation("Insufficient packet size for IFAC packet")
 
@@ -2088,7 +2089,6 @@ class Transport:
             name_hash = packet.data[RNS.Identity.KEYSIZE//8:RNS.Identity.KEYSIZE//8+RNS.Identity.NAME_HASH_LENGTH//8]
             if len(name_hash) != RNS.Identity.NAME_HASH_LENGTH//8: return packet.receiving_interface.protocol_violation(f"Malformed announce packet with size {len(packet.data)}")
             if len(raw) > RNS.Reticulum.MTU: return packet.receiving_interface.protocol_violation(f"Excessive announce packet frame size of {len(raw)} bytes")
-            if len(packet.receiving_interface.held_announces) >= packet.receiving_interface.ic_max_held_announces: return None
 
             if Transport.blocked_destination_types and name_hash in Transport.blocked_destination_types: return
             if Transport.required_destinations_only:
@@ -2097,13 +2097,13 @@ class Transport:
                 elif Transport.is_local_client_interface(packet.receiving_interface):    allowed = True if packet.hops == 1 else False # 1 == 0 really, yes it's weird  ~. . .~
                 elif Transport.interface_to_shared_instance(packet.receiving_interface): allowed = True if packet.hops == 1 else False # 1 == 0 really, yes it's weird    `-`
                 else:                                                                    allowed = False
-                if not allowed: return
+                if not allowed: return packet.receiving_interface.filtered_announce()
 
             if traffic_class < Transport.TC_ANNOUNCE: traffic_class = Transport.TC_ANNOUNCE
             announce_signature_valid = RNS.Identity.validate_announce(packet, only_validate_signature=True, signal_blackholed=True, signal_stamp=True)
-            if   announce_signature_valid == "blackholed":    return None
-            elif announce_signature_valid == "no_stamp":      return None
-            elif announce_signature_valid == "invalid_stamp": return None
+            if   announce_signature_valid == "blackholed":    return packet.receiving_interface.filtered_announce()
+            elif announce_signature_valid == "no_stamp":      return packet.receiving_interface.filtered_announce()
+            elif announce_signature_valid == "invalid_stamp": return packet.receiving_interface.filtered_announce()
             elif not announce_signature_valid:
                 return packet.receiving_interface.protocol_violation(f"Invalid announce signature for {RNS.prettyhexrep(packet.destination_hash)}")
 
@@ -2121,8 +2121,7 @@ class Transport:
                     pass
 
                 elif packet.receiving_interface.should_ingress_limit():
-                    packet.receiving_interface.hold_announce(packet)
-                    return
+                    return packet.receiving_interface.hold_announce(packet)
 
         # Ingress limit path requests early
         elif packet.destination_hash == Transport.pr_destination_hash:

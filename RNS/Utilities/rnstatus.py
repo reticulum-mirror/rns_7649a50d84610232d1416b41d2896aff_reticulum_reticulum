@@ -444,6 +444,7 @@ def program_setup(configdir, dispall=False, verbosity=0, name_filter=None, json=
             if sorting == "atx":                            interfaces.sort(key=lambda i: i["outgoing_announce_frequency"], reverse=not sort_reverse)
             if sorting == "arxc":                           interfaces.sort(key=lambda i: i["arxc"], reverse=not sort_reverse)
             if sorting == "atxc":                           interfaces.sort(key=lambda i: i["atxc"], reverse=not sort_reverse)
+            if sorting == "afrxc":                          interfaces.sort(key=lambda i: i["afrxc"], reverse=not sort_reverse)
             if sorting == "prx":                            interfaces.sort(key=lambda i: i["incoming_pr_frequency"], reverse=not sort_reverse)
             if sorting == "ptx":                            interfaces.sort(key=lambda i: i["outgoing_pr_frequency"], reverse=not sort_reverse)
             if sorting == "prxc":                           interfaces.sort(key=lambda i: i["prxc"], reverse=not sort_reverse)
@@ -745,7 +746,8 @@ def program_setup(configdir, dispall=False, verbosity=0, name_filter=None, json=
 
                         if asr:
                             if ifstat["arxc"] and ifstat["atxc"]:
-                                print(f"    Announces : {ifstat['arxc']}↓ {ifstat['atxc']}↑ total")
+                                f_str = f", {ifstat['afrxc']} filtered" if ifstat["afrxc"] else ""
+                                print(f"    Announces : {ifstat['arxc']}↓ {ifstat['atxc']}↑ total{f_str}")
                                 print(f"                {oaf} {pc_str}")
                             else:
                                 print(f"    Announces : {oaf} {pc_str}")
@@ -928,7 +930,7 @@ def main(must_exit=True, rns_instance=None):
         parser.add_argument("-p", "--pps", action="store_true", help="display packets per second in totals", default=False)
         parser.add_argument("-q", "--queues", action="store_true", help="display queue stats", default=False)
         parser.add_argument("-z", "--profiling", action="store_true", help="display live profiling results", default=False)
-        parser.add_argument("-s", "--sort", action="store", help="sort interfaces by [rate, traffic, rx, tx, rxs, txs, anns, arx, atx, arxc, atxc, held, prx, ptx, prxc, ptxc, pvs, ivs, flt, txdrp, txdrb, txbuf]", default=None, type=str)
+        parser.add_argument("-s", "--sort", action="store", help="sort interfaces by [rate, traffic, rx, tx, rxs, txs, frx, ftx, anns, arx, atx, arxc, atxc, afrxc, held, prx, ptx, prxc, ptxc, pvs, ivs, flt, txdrp, txdrb, txbuf]", default=None, type=str)
         parser.add_argument("-r", "--reverse", action="store_true", help="reverse sorting", default=False)
         parser.add_argument("-j", "--json", action="store_true", help="output in JSON format", default=False)
         parser.add_argument("-R", action="store", metavar="hash", help="transport identity hash of remote instance to get status from", default=None, type=str)

@@ -104,6 +104,7 @@ class Interface:
         self.atxb     = 0
         self.arxc     = 0
         self.atxc     = 0
+        self.afrxc    = 0
         self.prxb     = 0
         self.ptxb     = 0
         self.prxc     = 0
@@ -277,11 +278,14 @@ class Interface:
 
     def hold_announce(self, announce_packet):
         if announce_packet.hops >= RNS.Transport.PATHFINDER_M-1:
-            return
+            return self.filtered_announce()
         elif announce_packet.destination_hash in self.held_announces:
             self.held_announces[announce_packet.destination_hash] = announce_packet
+            return self.filtered_announce()
         elif not len(self.held_announces) >= self.ic_max_held_announces:
             self.held_announces[announce_packet.destination_hash] = announce_packet
+            return True
+        else: return self.filtered_announce()
 
     def process_held_announces(self):
         try:
@@ -311,25 +315,31 @@ class Interface:
     def received_announce(self, size=0, from_spawned=False):
         self.arxc += 1; self.arxb += size
         self.ia_freq_deque.append(time.time())
-        if hasattr(self, "parent_interface") and self.parent_interface != None:
+        if self.parent_interface != None:
             self.parent_interface.received_announce(size=size, from_spawned=True)
 
     def sent_announce(self, size=0, from_spawned=False):
         self.atxc += 1; self.atxb += size
         self.oa_freq_deque.append(time.time())
-        if hasattr(self, "parent_interface") and self.parent_interface != None:
+        if self.parent_interface != None:
             self.parent_interface.sent_announce(size=size, from_spawned=True)
+
+    def filtered_announce(self, size=0, from_spawned=False):
+        self.afrxc += 1
+        RNS.Transport.filtered_arxc += 1
+        if self.parent_interface != None: self.parent_interface.afrxc += 1
+        return None
 
     def received_path_request(self, size=0, from_spawned=False):
         self.prxc += 1; self.prxb += size
         self.ip_freq_deque.append(time.time())
-        if hasattr(self, "parent_interface") and self.parent_interface != None:
+        if self.parent_interface != None:
             self.parent_interface.received_path_request(size=size, from_spawned=True)
 
     def sent_path_request(self, size=0, from_spawned=False):
         self.ptxc += 1; self.ptxb += size
         self.op_freq_deque.append(time.time())
-        if hasattr(self, "parent_interface") and self.parent_interface != None:
+        if self.parent_interface != None:
             self.parent_interface.sent_path_request(size=size, from_spawned=True)
 
     def protocol_violation(self, description=None, level=None):
