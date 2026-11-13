@@ -1955,11 +1955,11 @@ class Transport:
             if interface.parent_interface: interface.parent_interface.rxb += raw_len
 
     @staticmethod
-    def inbound(raw, interface=None, tc=None, ifac_handled=False):
+    def inbound(raw, interface=None, tc=None, ifac_handled=False, no_accounting=False):
         try:
             accepted = Transport.preprocess_inbound(raw=raw, interface=interface, tc=tc, ifac_handled=ifac_handled)
-            if accepted: Transport.accepted_inbound(raw=raw, interface=interface)
-            else:        Transport.filtered_inbound(raw=raw, interface=interface)
+            if accepted: Transport.accepted_inbound(raw=raw, interface=interface) if not no_accounting else None
+            else:        Transport.filtered_inbound(raw=raw, interface=interface) if not no_accounting else None
         except Exception as e:
             RNS.log(f"Error while processing inbound on {interface}: {e}", RNS.LOG_ERROR)
             RNS.trace_exception(e)
@@ -3505,7 +3505,7 @@ class Transport:
                 # cache, replay it to the Transport instance,
                 # so that it can be directed towards it original
                 # destination.
-                Transport.inbound(packet.raw, packet.receiving_interface, ifac_handled=True)
+                Transport.inbound(packet.raw, packet.receiving_interface, ifac_handled=True, no_accounting=True)
                 return True
 
             else: return False
@@ -3517,7 +3517,7 @@ class Transport:
         if cached_packet:
             # The packet was found in the local cache,
             # replay it to the Transport instance.
-            Transport.inbound(cached_packet.raw, cached_packet.receiving_interface, ifac_handled=True)
+            Transport.inbound(cached_packet.raw, cached_packet.receiving_interface, ifac_handled=True, no_accounting=True)
         else:
             # The packet is not in the local cache,
             # query the network.
