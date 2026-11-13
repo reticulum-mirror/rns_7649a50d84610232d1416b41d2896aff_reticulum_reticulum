@@ -2077,7 +2077,7 @@ class Transport:
         if packet.packet_type == RNS.Packet.ANNOUNCE:
             name_hash = packet.data[RNS.Identity.KEYSIZE//8:RNS.Identity.KEYSIZE//8+RNS.Identity.NAME_HASH_LENGTH//8]
             if len(name_hash) != RNS.Identity.NAME_HASH_LENGTH//8: return packet.receiving_interface.protocol_violation(f"Malformed announce packet with size {len(packet.data)}")
-            if len(raw) > RNS.Reticulum.MTU: return packet.receiving_interface.protocol_violation(f"Excessive announce packet frame size of {len(raw)} bytes") if packet.receiving_interface else None
+            if len(raw) > RNS.Reticulum.MTU: return packet.receiving_interface.protocol_violation(f"Excessive announce packet frame size of {len(raw)} bytes")
             if len(packet.receiving_interface.held_announces) >= packet.receiving_interface.ic_max_held_announces: return None
 
             if Transport.blocked_destination_types and name_hash in Transport.blocked_destination_types: return
@@ -2095,9 +2095,9 @@ class Transport:
             elif announce_signature_valid == "no_stamp":      return None
             elif announce_signature_valid == "invalid_stamp": return None
             elif not announce_signature_valid:
-                return packet.receiving_interface.protocol_violation(f"Invalid announce signature for {RNS.prettyhexrep(packet.destination_hash)}") if packet.receiving_interface else None
+                return packet.receiving_interface.protocol_violation(f"Invalid announce signature for {RNS.prettyhexrep(packet.destination_hash)}")
 
-            elif packet.receiving_interface != None: packet.receiving_interface.received_announce(size=len(packet.raw))
+            else: packet.receiving_interface.received_announce(size=len(packet.raw))
             Transport.announce_rxc += 1
 
             announced_destination_known = packet.destination_hash in Transport.path_table
@@ -2118,10 +2118,10 @@ class Transport:
         elif packet.destination_hash == Transport.pr_destination_hash:
             if traffic_class < Transport.TC_PATH_REQUEST: traffic_class = Transport.TC_PATH_REQUEST
             if not len(packet.data) >= RNS.Identity.TRUNCATED_HASHLENGTH//8: return
-            elif len(packet.data) > Transport.PR_STAMPED_LENGTH: return packet.receiving_interface.protocol_violation(f"Excessive path request size of {len(packet.data)} bytes") if packet.receiving_interface else None
+            elif len(packet.data) > Transport.PR_STAMPED_LENGTH: return packet.receiving_interface.protocol_violation(f"Excessive path request size of {len(packet.data)} bytes")
             else:
                 pr = Transport.parse_path_request(packet.data)
-                if pr == None: return packet.receiving_interface.protocol_violation("Tagless path request", level=RNS.LOG_PATHING) if packet.receiving_interface else None
+                if pr == None: return packet.receiving_interface.protocol_violation("Tagless path request", level=RNS.LOG_PATHING)
                 else:
                     destination_hash = pr[0]
                     tag_bytes        = pr[2]
@@ -2130,7 +2130,7 @@ class Transport:
 
                     pr_length = len(packet.data)
                     if pr_length != Transport.PR_STAMPED_LENGTH and pr_length != Transport.PR_LENGTH and pr_length != Transport.PR_LEGACY_LENGTH: # TODO: Only allow stamped size after transition
-                        if packet.receiving_interface: return packet.receiving_interface.protocol_violation(f"Invalid path request size {pr_length}", level=RNS.LOG_PATHING)
+                        return packet.receiving_interface.protocol_violation(f"Invalid path request size {pr_length}", level=RNS.LOG_PATHING)
 
                     unique_tag = destination_hash+tag_bytes
 
@@ -2175,7 +2175,7 @@ class Transport:
                         if not stamp_ok:
                             if Transport.STAMPS_ENFORCED: return
 
-                    if packet.receiving_interface: packet.receiving_interface.received_path_request(size=len(raw))
+                    packet.receiving_interface.received_path_request(size=len(raw))
                     Transport.pr_rxc += 1
                     if interface.should_ingress_limit_pr():
                         traffic_class = Transport.TC_INGRESS_LIMITED
