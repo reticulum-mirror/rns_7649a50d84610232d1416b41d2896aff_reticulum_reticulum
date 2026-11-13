@@ -379,6 +379,8 @@ class Transport:
 
     traffic_rxb                 = 0
     traffic_txb                 = 0
+    filtered_rxb                = 0
+    filtered_txb                = 0
     announce_rxc                = 0
     announce_txc                = 0
     announce_rxb                = 0
@@ -389,6 +391,8 @@ class Transport:
     pr_txb                      = 0
     speed_rx                    = 0
     speed_tx                    = 0
+    filtered_speed_rx           = 0
+    filtered_speed_tx           = 0
     announce_speed_rx           = 0
     announce_speed_tx           = 0
     announce_freq_rx            = 0
@@ -749,6 +753,7 @@ class Transport:
                 rxb  = 0; txb  = 0; rxs  = 0; txs  = 0;
                 arxb = 0; atxb = 0; arxs = 0; atxs = 0;
                 prxb = 0; ptxb = 0; prxs = 0; ptxs = 0;
+                frxb = 0; ftxb = 0; frxs = 0; ftxs = 0;
                 iafreq = 0; oafreq = 0; ipfreq = 0; opfreq = 0
 
                 for interface in Transport.interfaces:
@@ -760,6 +765,7 @@ class Transport:
                             irxb  = interface.rxb;  itxb  = interface.txb
                             iarxb = interface.arxb; iatxb = interface.atxb
                             iprxb = interface.prxb; iptxb = interface.ptxb
+                            ifrxb = interface.frxb; iftxb = interface.ftxb
 
                             tc = interface.transport_traffic_counter
                             ts_diff = now  - tc["ts"]
@@ -767,6 +773,7 @@ class Transport:
                             rx_diff  = irxb - tc["rxb"];   tx_diff  = itxb - tc["txb"]
                             arx_diff = iarxb - tc["arxb"]; atx_diff = iatxb - tc["atxb"]
                             prx_diff = iprxb - tc["prxb"]; ptx_diff = iptxb - tc["ptxb"]
+                            frx_diff = ifrxb - tc["frxb"]; ftx_diff = iftxb - tc["ftxb"]
 
                             rxb    += rx_diff;  crxs  = (rx_diff*8)/ts_diff
                             txb    += tx_diff;  ctxs  = (tx_diff*8)/ts_diff
@@ -774,6 +781,8 @@ class Transport:
                             atxb   += atx_diff; catxs = (atx_diff*8)/ts_diff
                             prxb   += prx_diff; cprxs = (prx_diff*8)/ts_diff
                             ptxb   += ptx_diff; cptxs = (ptx_diff*8)/ts_diff
+                            frxb   += frx_diff; cfrxs = (frx_diff*8)/ts_diff
+                            ftxb   += ftx_diff; cftxs = (ftx_diff*8)/ts_diff
 
                             iafreq += interface.incoming_announce_frequency()
                             oafreq += interface.outgoing_announce_frequency()
@@ -786,16 +795,20 @@ class Transport:
                             interface.current_atx_speed = catxs; atxs += catxs
                             interface.current_prx_speed = cprxs; prxs += cprxs
                             interface.current_ptx_speed = cptxs; ptxs += cptxs
+                            interface.current_frx_speed = cfrxs; frxs += cfrxs
+                            interface.current_ftx_speed = cftxs; ftxs += cftxs
                             
                             tc["ts"]   = now
                             tc["rxb"]  = irxb;  tc["txb"]  = itxb
                             tc["arxb"] = iarxb; tc["atxb"] = iatxb
                             tc["prxb"] = iprxb; tc["ptxb"] = iptxb
+                            tc["frxb"] = ifrxb; tc["ftxb"] = iftxb
 
                         else:
                             interface.transport_traffic_counter = { "ts": time.time(), "rxb": interface.rxb, "txb": interface.txb,
                                                                     "arxb": interface.arxb, "atxb": interface.atxb,
-                                                                    "prxb": interface.prxb, "ptxb": interface.ptxb }
+                                                                    "prxb": interface.prxb, "ptxb": interface.ptxb,
+                                                                    "frxb": interface.frxb, "ftxb": interface.ftxb }
                 if not Transport.start_time: rpps = 0; tpps = 0
                 else:
                     if not cts: ts = Transport.start_time
@@ -812,6 +825,10 @@ class Transport:
                 Transport.traffic_txb       += txb
                 Transport.speed_rx           = rxs
                 Transport.speed_tx           = txs
+                Transport.filtered_rxb      += frxb
+                Transport.filtered_txb      += ftxb
+                Transport.filtered_speed_rx  = frxs
+                Transport.filtered_speed_tx  = ftxs
                 Transport.announce_rxb      += arxb
                 Transport.announce_txb      += atxb
                 Transport.announce_speed_rx  = arxs
@@ -1920,11 +1937,23 @@ class Transport:
         return False
 
     @staticmethod
+    def filtered_inbound(raw=None, interface=None):
+        if interface:
+            raw_len = len(raw) if raw else 0
+            interface.rxb -= raw_len; interface.frxb += raw_len
+            if interface.parent_interface:
+                interface.parent_interface.rxb  -= raw_len
+                interface.parent_interface.frxb += raw_len
+
+    @staticmethod
     def inbound(raw, interface=None, tc=None, ifac_handled=False):
-        try: Transport.preprocess_inbound(raw=raw, interface=interface, tc=tc, ifac_handled=ifac_handled)
+        try:
+            if not Transport.preprocess_inbound(raw=raw, interface=interface, tc=tc, ifac_handled=ifac_handled):
+                Transport.filtered_inbound(raw=raw, interface=interface)
         except Exception as e:
             RNS.log(f"Error while processing inbound on {interface}: {e}", RNS.LOG_ERROR)
             RNS.trace_exception(e)
+            Transport.filtered_inbound(raw=raw, interface=interface)
 
     @staticmethod
     def handle_ifac(raw, interface):
@@ -1992,6 +2021,10 @@ class Transport:
 
     @staticmethod
     def preprocess_inbound(raw, interface=None, tc=None, ifac_handled=False):
+        if not interface:
+            RNS.log(f"No interface set on inbound packet, dropping", RNS.LOG_WARNING)
+            return None
+
         if not Transport.ready:
             wait_start = time.time()
             while not Transport.ready:
@@ -2037,7 +2070,6 @@ class Transport:
         if not Transport.packet_filter(packet): return interface.packet_filter_hit()
         traffic_class = tc or Transport.TC_DATA
 
-        Transport.rx_packets += 1
         packet.receiving_interface = interface
         packet.hops += 1
 
@@ -2177,12 +2209,15 @@ class Transport:
                     # locally on this system. Might need adding a local_client_dest_map,
                     # but this will need to be kept *tightly* in-sync.
 
+        Transport.rx_packets += 1
         if not Transport.USE_INBOUND_QUEUE: return Transport._inbound(packet)
         else:
             if traffic_class == Transport.TC_INGRESS_LIMITED: packet.traffic_class = Transport.TC_INGRESS_LIMITED
             try: Transport.inbound_queues.put(traffic_class, packet, block=False)
             except Full: RNS.log(f"Dropping inbound packet, queue is full (tc={traffic_class})", RNS.LOG_EXTREME) if RNS.sl(RNS.LOG_EXTREME) else None
             except Exception as e: RNS.log(f"Error while inserting into inbound queue: {e}", RNS.LOG_ERROR)
+
+        return True
 
     @staticmethod
     def inbound_job():

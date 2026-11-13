@@ -160,7 +160,7 @@ def program_setup(configdir, dispall=False, verbosity=0, name_filter=None, json=
                   sorting=None, sort_reverse=False, remote=None, management_identity=None, must_exit=True, rns_instance=None,
                   traffic_totals=False, discovered_interfaces=False, config_entries=False, burst_filter=False, blocked_ips=False,
                   queue_stats=False, pps=False, profiling=False, remote_timeout=RNS.Transport.PATH_REQUEST_TIMEOUT,
-                  attach=None, detach=None, reload=None, show_stale=False, show_unknown=False):
+                  attach=None, detach=None, reload=None, show_stale=False, show_unknown=False, fstats=False):
   
     if remote: require_shared = False
     else: require_shared = True
@@ -432,8 +432,12 @@ def program_setup(configdir, dispall=False, verbosity=0, name_filter=None, json=
             if sorting == "rate" or sorting == "bitrate":   interfaces.sort(key=lambda i: i["bitrate"], reverse=not sort_reverse)
             if sorting == "rx":                             interfaces.sort(key=lambda i: i["rxb"], reverse=not sort_reverse)
             if sorting == "tx":                             interfaces.sort(key=lambda i: i["txb"], reverse=not sort_reverse)
+            if sorting == "frx":                            interfaces.sort(key=lambda i: i["frxb"], reverse=not sort_reverse)
+            if sorting == "ftx":                            interfaces.sort(key=lambda i: i["ftxb"], reverse=not sort_reverse)
             if sorting == "rxs":                            interfaces.sort(key=lambda i: i["rxs"], reverse=not sort_reverse)
             if sorting == "txs":                            interfaces.sort(key=lambda i: i["txs"], reverse=not sort_reverse)
+            if sorting == "frxs":                           interfaces.sort(key=lambda i: i["frxs"], reverse=not sort_reverse)
+            if sorting == "ftxs":                           interfaces.sort(key=lambda i: i["ftxs"], reverse=not sort_reverse)
             if sorting == "traffic":                        interfaces.sort(key=lambda i: i["rxb"]+i["txb"], reverse=not sort_reverse)
             if sorting == "anns" or sorting == "announces": interfaces.sort(key=lambda i: i["incoming_announce_frequency"]+i["outgoing_announce_frequency"], reverse=not sort_reverse)
             if sorting == "arx":                            interfaces.sort(key=lambda i: i["incoming_announce_frequency"], reverse=not sort_reverse)
@@ -760,6 +764,14 @@ def program_setup(configdir, dispall=False, verbosity=0, name_filter=None, json=
                       
                         print(f"    Traffic   : {txstat}\n                {rxstat}")
 
+                        if fstats:
+                            frxstat = "↓"+RNS.prettysize(ifstat["frxb"])
+                            ftxstat = "↑"+RNS.prettysize(ifstat["ftxb"])
+                            if "frxs" in ifstat and "ftxs" in ifstat:
+                                frxstat += "  "+RNS.prettyspeed(ifstat["frxs"])
+                                ftxstat += "  "+RNS.prettyspeed(ifstat["ftxs"])
+                            print(f"    Filtered  : {ftxstat}\n                {frxstat}")
+
         lstr = ""
         if link_count != None and lstats:
             ms = "y" if link_count == 1 else "ies"
@@ -799,6 +811,19 @@ def program_setup(configdir, dispall=False, verbosity=0, name_filter=None, json=
                 txstat = f"{txstat}, {tpps}"
 
             print(f"\n Totals       : {txstat}\n                {rxstat}")
+
+            if fstats:
+                frxstat = "↓"+RNS.prettysize(stats["frxb"])
+                ftxstat = "↑"+RNS.prettysize(stats["ftxb"])
+
+                strdiff = len(frxstat)-len(ftxstat)
+                if   strdiff > 0: ftxstat += " "*strdiff
+                elif strdiff < 0: frxstat += " "*-strdiff
+
+                if "frxs" in ifstat and "ftxs" in ifstat:
+                    frxstat += "  "+RNS.prettyspeed(stats["frxs"])
+                    ftxstat += "  "+RNS.prettyspeed(stats["ftxs"])
+                print(f"\n Filtered     : {ftxstat}\n                {frxstat}")
 
             if pstats:
                 if "prxb" in stats and "ptxb" in stats and "prxs" in stats and "ptxs" in stats:
@@ -895,6 +920,7 @@ def main(must_exit=True, rns_instance=None):
         parser.add_argument("-a", "--all", action="store_true", help="show all interfaces", default=False)
         parser.add_argument("-A", "--announce-stats", action="store_true", help="show announce stats", default=False)
         parser.add_argument("-P", "--pr-stats", action="store_true", help="show path request stats", default=False)
+        parser.add_argument("-F", "--filter-stats", action="store_true", help="show filtered traffic stats", default=False)
         parser.add_argument("-l", "--link-stats", action="store_true", help="show link stats", default=False)
         parser.add_argument("-B", "--burst", action="store_true", help="only show interfaces with active bursts", default=False)
         parser.add_argument("-b", "--blocked-ips", action="store_true", help="show blocked IPs per interface", default=False)
@@ -945,7 +971,7 @@ def main(must_exit=True, rns_instance=None):
                                   remote=args.R, management_identity=args.i, remote_timeout=args.w, must_exit=False, rns_instance=reticulum,
                                   traffic_totals=args.totals, discovered_interfaces=args.discovered, config_entries=args.D, burst_filter=args.burst,
                                   blocked_ips=args.blocked_ips, queue_stats=args.queues, pps=args.pps, profiling=args.profiling,
-                                  show_stale=args.show_stale, show_unknown=args.show_unknown)
+                                  show_stale=args.show_stale, show_unknown=args.show_unknown, fstats=args.filter_stats)
               
                 finally:
                     sys.stdout = old_stdout
@@ -964,7 +990,8 @@ def main(must_exit=True, rns_instance=None):
                           remote=args.R, management_identity=args.i, remote_timeout=args.w, must_exit=must_exit, rns_instance=rns_instance,
                           traffic_totals=args.totals, discovered_interfaces=args.discovered, config_entries=args.D, burst_filter=args.burst,
                           blocked_ips=args.blocked_ips, queue_stats=args.queues, pps=args.pps, profiling=args.profiling,
-                          attach=args.attach, detach=args.detach, reload=args.reload, show_stale=args.show_stale, show_unknown=args.show_unknown)
+                          attach=args.attach, detach=args.detach, reload=args.reload, show_stale=args.show_stale,
+                          show_unknown=args.show_unknown, fstats=args.filter_stats)
 
     except KeyboardInterrupt:
         print("")

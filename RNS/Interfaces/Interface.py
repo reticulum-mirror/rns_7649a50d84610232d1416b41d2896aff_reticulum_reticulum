@@ -98,6 +98,8 @@ class Interface:
     def __init__(self):
         self.rxb      = 0
         self.txb      = 0
+        self.frxb     = 0
+        self.ftxb     = 0
         self.arxb     = 0
         self.atxb     = 0
         self.arxc     = 0

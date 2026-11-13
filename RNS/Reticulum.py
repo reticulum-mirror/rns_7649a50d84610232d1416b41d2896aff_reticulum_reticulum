@@ -1727,6 +1727,16 @@ class Reticulum:
                     else:                                  ifstats["txs"] = 0
                 else:                                      ifstats["txs"] = 0
 
+                if hasattr(interface, "current_frx_speed"):
+                    if interface.current_frx_speed != None: ifstats["frxs"] = interface.current_frx_speed
+                    else:                                   ifstats["frxs"] = 0
+                else:                                       ifstats["frxs"] = 0
+
+                if hasattr(interface, "current_ftx_speed"):
+                    if interface.current_ftx_speed != None: ifstats["ftxs"] = interface.current_ftx_speed
+                    else:                                   ifstats["ftxs"] = 0
+                else:                                       ifstats["ftxs"] = 0
+
                 if hasattr(interface, "current_arx_speed"):
                     if interface.current_arx_speed != None: ifstats["arxs"] = interface.current_arx_speed
                     else:                                   ifstats["arxs"] = 0
@@ -1781,6 +1791,8 @@ class Reticulum:
                 ifstats["mtu"]                         = interface.HW_MTU
                 ifstats["rxb"]                         = interface.rxb
                 ifstats["txb"]                         = interface.txb
+                ifstats["frxb"]                        = interface.frxb
+                ifstats["ftxb"]                        = interface.ftxb
                 ifstats["arxb"]                        = interface.arxb
                 ifstats["atxb"]                        = interface.atxb
                 ifstats["arxc"]                        = interface.arxc
@@ -1831,6 +1843,10 @@ class Reticulum:
             stats["txb"]         = RNS.Transport.traffic_txb
             stats["rxs"]         = RNS.Transport.speed_rx
             stats["txs"]         = RNS.Transport.speed_tx
+            stats["frxb"]        = RNS.Transport.filtered_rxb
+            stats["ftxb"]        = RNS.Transport.filtered_txb
+            stats["frxs"]        = RNS.Transport.filtered_speed_rx
+            stats["ftxs"]        = RNS.Transport.filtered_speed_tx
             stats["arxb"]        = RNS.Transport.announce_rxb
             stats["atxb"]        = RNS.Transport.announce_txb
             stats["arxs"]        = RNS.Transport.announce_speed_rx
