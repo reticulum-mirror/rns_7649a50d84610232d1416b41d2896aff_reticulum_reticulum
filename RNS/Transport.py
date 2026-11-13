@@ -1926,8 +1926,7 @@ class Transport:
         if not packet.packet_hash in Transport.packet_hashlist: return True
         else:
             if packet.packet_type == RNS.Packet.ANNOUNCE:
-                if packet.destination_type == RNS.Destination.SINGLE:
-                    return True
+                if packet.destination_type == RNS.Destination.SINGLE: return True
                 else:
                     RNS.log("Dropped invalid announce packet", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
                     if packet.receiving_interface: packet.receiving_interface.protocol_violation("Announce packet with invalid destination type")
