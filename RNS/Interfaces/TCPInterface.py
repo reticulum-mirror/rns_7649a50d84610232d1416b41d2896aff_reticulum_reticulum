@@ -305,10 +305,6 @@ class TCPClientInterface(Interface):
     def process_incoming(self, data):
         if not data: return
         if self.online and not self.detached:
-            self.rxb += len(data)
-            if hasattr(self, "parent_interface") and self.parent_interface != None:
-                self.parent_interface.rxb += len(data)
-                        
             self.owner.inbound(data, self)
 
     def process_outgoing(self, data):

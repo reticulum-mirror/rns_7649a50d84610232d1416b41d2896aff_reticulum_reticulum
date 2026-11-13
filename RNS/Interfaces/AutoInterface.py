@@ -663,8 +663,6 @@ class AutoInterfacePeer(Interface):
                 self.owner.refresh_peer(self.addr)
                 self.owner.mif_deque.append(data_hash)
                 self.owner.mif_deque_times.append([data_hash, time.time()])
-                self.rxb += len(data)
-                self.owner.rxb += len(data)
                 self.owner.owner.inbound(data, self)
 
     def process_outgoing(self, data):

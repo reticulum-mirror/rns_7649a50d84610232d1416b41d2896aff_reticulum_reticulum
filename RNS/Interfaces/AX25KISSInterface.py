@@ -266,9 +266,7 @@ class AX25KISSInterface(Interface):
 
 
     def process_incoming(self, data):
-        if (len(data) > AX25.HEADER_SIZE):
-            self.rxb += len(data)
-            self.owner.inbound(data[AX25.HEADER_SIZE:], self)
+        if (len(data) > AX25.HEADER_SIZE): self.owner.inbound(data[AX25.HEADER_SIZE:], self)
 
 
     def process_outgoing(self,data):

@@ -202,9 +202,6 @@ class LocalClientInterface(Interface):
             except Exception as e: RNS.log(f"Exception occurred while sending keepalive on {self}: {e}", RNS.LOG_ERROR)
 
     def process_incoming(self, data):
-        self.rxb += len(data)
-        if self.parent_interface != None: self.parent_interface.rxb += len(data)
-        
         try: self.owner.inbound(data, self)
         except Exception as e:
             RNS.log(f"An error occurred in the processing of an incoming frame for {self}: {e}", RNS.LOG_ERROR)

@@ -538,9 +538,6 @@ class I2PInterfacePeer(Interface):
 
     def process_incoming(self, data):
         if not data: return
-        self.rxb += len(data)
-        if hasattr(self, "parent_interface") and self.parent_interface != None and self.parent_count:
-            self.parent_interface.rxb += len(data)
         self.owner.inbound(data, self)
 
     def process_outgoing(self, data):

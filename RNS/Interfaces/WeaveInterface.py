@@ -249,7 +249,6 @@ class WDCL():
         self.online = True
 
     def process_incoming(self, data):
-        self.rxb += len(data)
         if self.device:
             while len(self.frame_queue): self.device.incoming_frame(self.frame_queue.pop())
             self.device.incoming_frame(data)
@@ -1060,8 +1059,6 @@ class WeaveInterfacePeer(Interface):
                 self.owner.refresh_peer(self.endpoint_addr)
                 self.owner.mif_deque.append(data_hash)
                 self.owner.mif_deque_times.append([data_hash, time.time()])
-                self.rxb += len(data)
-                self.owner.rxb += len(data)
                 self.owner.owner.inbound(data, self)
 
     def process_outgoing(self, data):

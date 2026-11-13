@@ -1944,16 +1944,22 @@ class Transport:
     def filtered_inbound(raw=None, interface=None):
         if interface:
             raw_len = len(raw) if raw else 0
-            interface.rxb -= raw_len; interface.frxb += raw_len
-            if interface.parent_interface:
-                interface.parent_interface.rxb  -= raw_len
-                interface.parent_interface.frxb += raw_len
+            interface.frxb += raw_len
+            if interface.parent_interface: interface.parent_interface.frxb += raw_len
+
+    @staticmethod
+    def accepted_inbound(raw=None, interface=None):
+        if interface:
+            raw_len = len(raw) if raw else 0
+            interface.rxb += raw_len
+            if interface.parent_interface: interface.parent_interface.rxb += raw_len
 
     @staticmethod
     def inbound(raw, interface=None, tc=None, ifac_handled=False):
         try:
-            if not Transport.preprocess_inbound(raw=raw, interface=interface, tc=tc, ifac_handled=ifac_handled):
-                Transport.filtered_inbound(raw=raw, interface=interface)
+            accepted = Transport.preprocess_inbound(raw=raw, interface=interface, tc=tc, ifac_handled=ifac_handled)
+            if accepted: Transport.accepted_inbound(raw=raw, interface=interface)
+            else:        Transport.filtered_inbound(raw=raw, interface=interface)
         except Exception as e:
             RNS.log(f"Error while processing inbound on {interface}: {e}", RNS.LOG_ERROR)
             RNS.trace_exception(e)
@@ -2214,7 +2220,7 @@ class Transport:
                     # but this will need to be kept *tightly* in-sync.
 
         Transport.rx_packets += 1
-        if not Transport.USE_INBOUND_QUEUE: return Transport._inbound(packet)
+        if not Transport.USE_INBOUND_QUEUE: Transport._inbound(packet)
         else:
             if traffic_class == Transport.TC_INGRESS_LIMITED: packet.traffic_class = Transport.TC_INGRESS_LIMITED
             try: Transport.inbound_queues.put(traffic_class, packet, block=False)

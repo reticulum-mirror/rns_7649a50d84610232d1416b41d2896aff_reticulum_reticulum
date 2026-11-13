@@ -1043,10 +1043,6 @@ class BackboneClientInterface(Interface):
 
     def process_incoming(self, data):
         if self.online and not self.detached:
-            self.rxb += len(data)
-            if hasattr(self, "parent_interface") and self.parent_interface != None:
-                self.parent_interface.rxb += len(data)
-
             self.dp_ingress_packets += 1
             self.owner.inbound(data, self)
 
