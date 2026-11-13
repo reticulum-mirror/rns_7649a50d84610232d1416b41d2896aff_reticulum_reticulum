@@ -461,8 +461,13 @@ class Transport:
             Transport.unused_path_linger = Transport.UNUSED_PATH_LINGER
         RNS.log(f"Unused path linger time is {RNS.prettytime(Transport.unused_path_linger)}", RNS.LOG_DEBUG)
 
-        packet_hashlist_path = RNS.Reticulum.storagepath+"/packet_hashlist.raw"
+        packet_hashlist_path     = RNS.Reticulum.storagepath+"/packet_hashlist.raw"
+        announce_rate_table_path = RNS.Reticulum.storagepath+"/announce_rate_table"
         if RNS.Reticulum.transport_enabled() and not Transport.owner.is_connected_to_shared_instance:
+            if os.path.isfile(announce_rate_table_path):
+                if Transport.announce_rate_table.load(announce_rate_table_path): RNS.log(f"Loaded announce rate table from storage", RNS.LOG_DEBUG) if RNS.LOG_DEBUG else None
+                else: RNS.log(f"Could not load announce rate table from storage, initialized empty", RNS.LOG_WARNING)
+
             if os.path.isfile(packet_hashlist_path):
                 try:
                     with open(packet_hashlist_path, "rb") as file:
@@ -4508,12 +4513,20 @@ class Transport:
             Transport.saving_tunnel_table = False
 
     @staticmethod
+    def save_announce_rate_table(background=False):
+        if RNS.Reticulum.transport_enabled() and not Transport.owner.is_connected_to_shared_instance:
+            RNS.log("Saving announce rate table to storage...", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+            st = time.time(); Transport.announce_rate_table.persist(RNS.Reticulum.storagepath+"/announce_rate_table")
+            RNS.log(f"Saved announce rate table to storage in {RNS.prettyshorttime(time.time()-st, compact=True)}", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
+
+    @staticmethod
     def persist_data(background=False):
         if Transport.persist_lock.locked(): return
         with Transport.persist_lock:
             Transport.save_packet_hashlist(background=background)
             Transport.save_path_table(background=background)
             Transport.save_tunnel_table(background=background)
+            Transport.save_announce_rate_table(background=background)
 
     ########################
     # Blackhole Management #

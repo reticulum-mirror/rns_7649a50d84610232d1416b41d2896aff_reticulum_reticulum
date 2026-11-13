@@ -30,6 +30,8 @@
 
 import RNS
 import hashlib
+import struct
+import sys
 import threading
 import os
 import time
@@ -161,6 +163,189 @@ class AnnounceRateTable:
             else:               ts = list(self._ts[base+head:base+self.max_ts]) + list(self._ts[base:base+head])
             yield key, { "last": self._last[slot], "rate_violations": self._viol[slot],
                          "blocked_until": self._blocked[slot], "timestamps": ts }
+
+    # Persists the announce rate table to a file, in
+    # compacted, little-endian binary format:
+    #
+    #   Header (16 bytes)
+    #     0x00  6  Magic bytes
+    #     0x06  1  Format version
+    #     0x07  1  Flags, reserved, must be zero
+    #     0x08  1  Timestamp ring size (max_ts)
+    #     0x09  1  Destination hash length in bytes (keylen)
+    #     0x0A  2  Reserved, zero
+    #     0x0C  4  Entry count, uint32, little-endian
+    #
+    #   Entries (columnar, in native slot order)
+    #     Destination hash keys, followed by the _last, _blocked,
+    #     _viol, _ts_len, _ts_head and _ts columns, all encoded as
+    #     little-endian fixed-width values.
+    #
+    # Caller must hold the announce rate table lock
+
+    PERSIST_MAGIC   = b"RNSART"
+    PERSIST_VERSION = 0x01
+    def persist(self, path, retain=None):
+        try:
+            count = len(self._keys)
+
+            if count > 0:
+                keylen = len(self._keys[0])
+                for key in self._keys:
+                    if len(key) != keylen: raise ValueError("Inconsistent destination hash lengths in table")
+            else:
+                keylen = RNS.Identity.TRUNCATED_HASHLENGTH//8
+
+            if retain != None and count > 0:
+                now     = time.time()
+                horizon = now - retain
+                keep    = [slot for slot in range(count) if not (self._last[slot] < horizon and self._blocked[slot] <= now)]
+            else:
+                keep = None
+
+            if keep != None and len(keep) != count:
+                count = len(keep)
+                keys    = [self._keys[slot] for slot in keep]
+                last    = array("d", [self._last[slot] for slot in keep])
+                blocked = array("d", [self._blocked[slot] for slot in keep])
+                viol    = array("i", [self._viol[slot] for slot in keep])
+                ts_len  = array("B", [self._ts_len[slot] for slot in keep])
+                ts_head = array("B", [self._ts_head[slot] for slot in keep])
+                ts      = array("d")
+                for slot in keep: ts.extend(self._ts[slot*self.max_ts:(slot+1)*self.max_ts])
+            else:
+                keys    = self._keys
+                last    = self._last
+                blocked = self._blocked
+                viol    = self._viol
+                ts_len  = self._ts_len
+                ts_head = self._ts_head
+                ts      = self._ts
+
+            if last.itemsize != 8 or viol.itemsize != 4:
+                raise ValueError(f"Unsupported array itemsize at persist: d={last.itemsize}, i={viol.itemsize}")
+
+            header  = self.PERSIST_MAGIC
+            header += bytes([self.PERSIST_VERSION, 0x00, self.max_ts & 0xFF, keylen & 0xFF])
+            header += struct.pack("<H", 0)
+            header += struct.pack("<I", count)
+
+            blob  = header
+            blob += b"".join(keys)
+            blob += self._column_le(last)
+            blob += self._column_le(blocked)
+            blob += self._column_le(viol)
+            blob += ts_len.tobytes()
+            blob += ts_head.tobytes()
+            blob += self._column_le(ts)
+
+            tmp_path = path+".tmp"
+            with open(tmp_path, "wb") as file: file.write(blob)
+            os.replace(tmp_path, path)
+            return True
+
+        except Exception as e:
+            RNS.log(f"Could not persist announce rate table to {path}: {e}", RNS.LOG_ERROR)
+            return False
+
+    # Caller must hold the announce rate table lock
+    def load(self, path):
+        try:
+            with open(path, "rb") as file: blob = file.read()
+        except Exception: return False
+
+        try:
+            if len(blob) < 16:                  return False
+            if blob[0:6] != self.PERSIST_MAGIC: return False
+            if blob[6] != self.PERSIST_VERSION: return False
+            if blob[7] != 0x00:                 return False
+
+            file_max_ts = blob[8]
+            keylen      = blob[9]
+            count       = struct.unpack_from("<I", blob, 12)[0]
+
+            if file_max_ts < 1 or file_max_ts > 255: return False
+            if keylen < 1:                           return False
+
+            entry_size = keylen+22+file_max_ts*8
+            if len(blob) != 16+count*entry_size:     return False
+
+            if file_max_ts == self.max_ts:
+                # Ring size matches, load directly
+                keys  = [blob[16+slot*keylen : 16+(slot+1)*keylen] for slot in range(count)]
+                index = {}
+                for slot in range(count):
+                    if keys[slot] in index: return False
+                    index[keys[slot]] = slot
+
+                offset  = 16+count*keylen
+                last    = self._column_from_le("d", blob[offset:offset+count*8]);               offset += count*8
+                blocked = self._column_from_le("d", blob[offset:offset+count*8]);               offset += count*8
+                viol    = self._column_from_le("i", blob[offset:offset+count*4]);               offset += count*4
+                ts_len  = array("B", blob[offset:offset+count]);                                offset += count
+                ts_head = array("B", blob[offset:offset+count]);                                offset += count
+                ts      = self._column_from_le("d", blob[offset:offset+count*self.max_ts*8]);   offset += count*self.max_ts*8
+
+                for slot in range(count):
+                    if ts_len[slot] > self.max_ts or ts_head[slot] >= self.max_ts: return False
+
+            else:
+                # Different ring sizes from current running config,
+                # rebuild entries best effort.
+                keys  = [blob[16+slot*keylen : 16+(slot+1)*keylen] for slot in range(count)]
+                index = {}
+                for slot in range(count):
+                    if keys[slot] in index: return False
+                    index[keys[slot]] = slot
+
+                offset    = 16+count*keylen
+                last      = self._column_from_le("d", blob[offset:offset+count*8]);             offset += count*8
+                blocked   = self._column_from_le("d", blob[offset:offset+count*8]);             offset += count*8
+                viol      = self._column_from_le("i", blob[offset:offset+count*4]);             offset += count*4
+                f_ts_len  = array("B", blob[offset:offset+count]);                              offset += count
+                f_ts_head = array("B", blob[offset:offset+count]);                              offset += count
+                f_ts      = self._column_from_le("d", blob[offset:offset+count*file_max_ts*8]); offset += count*file_max_ts*8
+
+                for slot in range(count):
+                    if f_ts_len[slot] > file_max_ts or f_ts_head[slot] >= file_max_ts: return False
+
+                ts_len = array("B"); ts_head = array("B"); ts = array("d")
+                for slot in range(count):
+                    base = slot*file_max_ts
+                    if f_ts_len[slot] < file_max_ts: chronological = list(f_ts[base:base+f_ts_len[slot]])
+                    else:                            chronological = list(f_ts[base+f_ts_head[slot]:base+file_max_ts])+list(f_ts[base:base+f_ts_head[slot]])
+                    chronological = chronological[-self.max_ts:]
+                    ts_count      = len(chronological)
+
+                    ts_len.append(ts_count)
+                    ts.extend(chronological)
+                    if ts_count < self.max_ts: ts.extend([0.0]*(self.max_ts-ts_count))
+                    ts_head.append(ts_count % self.max_ts)
+
+            self._index   = index
+            self._keys    = keys
+            self._last    = last
+            self._blocked = blocked
+            self._viol    = viol
+            self._ts      = ts
+            self._ts_len  = ts_len
+            self._ts_head = ts_head
+            self._cursor  = 0
+
+            return True
+
+        except Exception as e:
+            RNS.log(f"Could not load announce rate table from {path}: {e}", RNS.LOG_ERROR)
+            return False
+
+    def _column_le(self, column):
+        if sys.byteorder == "big": swapped = array(column.typecode, column); swapped.byteswap(); return swapped.tobytes()
+        else: return column.tobytes()
+
+    def _column_from_le(self, typecode, data):
+        column = array(typecode); column.frombytes(data)
+        if sys.byteorder == "big": column.byteswap()
+        return column
 
 class PacketHashlist:
     # Bucketed byte-blob packet filter hashlist, with the primary
