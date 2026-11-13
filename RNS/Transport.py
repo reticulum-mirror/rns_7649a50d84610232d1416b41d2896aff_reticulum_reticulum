@@ -2117,8 +2117,7 @@ class Transport:
                 # destinations will have re-announces controlled
                 # by normal announce rate limiting.
                 if packet.destination_hash in Transport.path_requests or packet.destination_hash in Transport.discovery_path_requests:
-                    # RNS.log(f"Skipping ingress limit check for {RNS.prettyhexrep(packet.destination_hash)} due to waiting path requests", RNS.LOG_DEBUG) if RNS.sl(RNS.LOG_DEBUG) else None
-                    pass
+                    RNS.log(f"Skipping ingress limit check for {RNS.prettyhexrep(packet.destination_hash)} due to waiting path requests", RNS.LOG_PATHING) if RNS.sl(RNS.LOG_PATHING) else None
 
                 elif packet.receiving_interface.should_ingress_limit():
                     return packet.receiving_interface.hold_announce(packet)
