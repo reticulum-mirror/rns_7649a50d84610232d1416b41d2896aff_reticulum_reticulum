@@ -725,20 +725,20 @@ class Identity:
 
             if r["ratchet"]: Identity._remember_ratchet(r["destination_hash"], r["ratchet"])
 
-        valid_announce_loglevel = RNS.LOG_EXTREME # TODO: Reset to LOG_EXTREME
-        if RNS.sl(valid_announce_loglevel):
-            if r["rssi"] != None or r["snr"] != None:
-                signal_str = " ["
-                if r["rssi"] != None:
-                    signal_str += "RSSI "+str(r["rssi"])+"dBm"
-                    if r["snr"] != None: signal_str += ", "
-                if r["snr"] != None: signal_str += "SNR "+str(r["snr"])+"dB"
-                signal_str += "]"
-            else: signal_str = ""
+            valid_announce_loglevel = RNS.LOG_EXTREME
+            if RNS.sl(valid_announce_loglevel):
+                if r["rssi"] != None or r["snr"] != None:
+                    signal_str = " ["
+                    if r["rssi"] != None:
+                        signal_str += "RSSI "+str(r["rssi"])+"dBm"
+                        if r["snr"] != None: signal_str += ", "
+                    if r["snr"] != None: signal_str += "SNR "+str(r["snr"])+"dB"
+                    signal_str += "]"
+                else: signal_str = ""
 
-            via_str = f" via {RNS.prettyhexrep(r['transport_id'])}" if r["transport_id"] else ""
-            val_str = f" (v:{RNS.prettycost(r['stamp_value'])})"
-            RNS.log(f"Valid announce for {RNS.prettyhexrep(r['destination_hash'])}{val_str} {r['hops']} hops away, received{via_str} on {r['receiving_interface']}{signal_str}", valid_announce_loglevel)
+                via_str = f" via {RNS.prettyhexrep(r['transport_id'])}" if r["transport_id"] else ""
+                val_str = f" (v:{RNS.prettycost(r['stamp_value'])})"
+                RNS.log(f"Valid announce for {RNS.prettyhexrep(r['destination_hash'])}{val_str} {r['hops']} hops away, received{via_str} on {r['receiving_interface']}{signal_str}", valid_announce_loglevel)
 
         return True
 
