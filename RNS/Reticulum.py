@@ -1192,11 +1192,17 @@ class Reticulum:
         discovery_modulation = None
         if "discoverable" in c:
             discoverable = c.as_bool("discoverable")
+            if discoverable and not Reticulum.__static_transport_identity and not Reticulum.__transport_enabled:
+                RNS.log(f"", RNS.LOG_WARNING)
+                RNS.log(f"The interface \"{name}\" was configured discoverable, but this instance has transport disabled", RNS.LOG_WARNING)
+                RNS.log(f"and is using an ephemeral transport identity. To make interfaces discoverable for non-transport", RNS.LOG_WARNING)
+                RNS.log(f"instances, you will have explicitly enable using static transport identity in the config file,", RNS.LOG_WARNING)
+                RNS.log(f"by adding \"static_transport_identity = yes\" to the [reticulum] section.", RNS.LOG_WARNING)
+                RNS.log(f"", RNS.LOG_WARNING)
+                discoverable = False
+
             if discoverable:
                 Reticulum.__discovery_enabled = True
-                if not Reticulum.__static_transport_identity and not Reticulum.__transport_enabled:
-                    RNS.log(f"Discoverable interface was configured, enabling static transport identity on non-transport instance", RNS.LOG_WARNING)
-                    Reticulum.__static_transport_identity = True
 
                 if "announce_interval" in c:
                     discovery_announce_interval = c.as_int("announce_interval")*60
